@@ -1,0 +1,74 @@
+{
+  "mission": "Villages of Hope - Supporting women who survived sex trafficking",
+  "date_window_months": 18,
+  "keywords": [
+    "trafficking",
+    "sex trafficking",
+    "human trafficking",
+    "victim services",
+    "sexual assault",
+    "domestic violence",
+    "survivor services",
+    "shelter",
+    "transitional housing",
+    "case management",
+    "legal aid",
+    "counseling",
+    "workforce reentry"
+  ],
+  "grants_gov": {
+    "endpoint": "https://apply07.grants.gov/grantsws/rest/opportunities/search",
+    "funding_categories": ["ISS", "HL", "ED", "LJL", "HU"],
+    "funding_categories_descriptions": {
+      "ISS": "Income Security and Social Services",
+      "HL": "Health",
+      "ED": "Education",
+      "LJL": "Law, Justice and Legal Services",
+      "HU": "Humanities"
+    },
+    "eligibilities": ["12", "13"],
+    "eligibilities_descriptions": {
+      "12": "Nonprofits having a 501(c)(3) status with the IRS, other than institutions of higher education",
+      "13": "Nonprofits that do not have a 501(c)(3) status with the IRS, other than institutions of higher education"
+    },
+    "opp_statuses": "posted|forecasted",
+    "rows": 50,
+    "sort_by": "openDate"
+  },
+  "sam_gov": {
+    "endpoint": "https://api.sam.gov/opportunities/v2/search",
+    "ptype": ["o", "k", "s", "r"],
+    "ptype_descriptions": {
+      "o": "Solicitation",
+      "k": "Combined Synopsis/Solicitation",
+      "s": "Special Notice",
+      "r": "Sources Sought"
+    },
+    "classification_code": "G004",
+    "classification_code_description": "Social—Social Rehabilitation",
+    "max_date_window_days": 365,
+    "limit": 100,
+    "title_search_terms": ["trafficking", "sex trafficking", "human trafficking"]
+  },
+  "usaspending": {
+    "endpoint": "https://api.usaspending.gov/api/v2/search/spending_by_award/",
+    "award_type_codes": ["02", "03"],
+    "award_type_descriptions": {
+      "02": "Block Grant",
+      "03": "Formula Grant"
+    },
+    "limit": 100,
+    "sort_by": "Award Amount",
+    "order": "desc"
+  },
+  "filters": {
+    "geography": null,
+    "agency": null
+  },
+  "notes": [
+    "No geography or agency restrictions per Villages of Hope requirements.",
+    "SAM.gov enforces 1-year max date window; 18-month queries split into two calls and merged.",
+    "All three APIs queried with trafficking-related keywords aligned to mission."
+  ]
+}
+

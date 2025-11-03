@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"C:\\Users\\mdavis\\testing\\grants-web-app\" /b)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

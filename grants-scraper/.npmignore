@@ -1,0 +1,12 @@
+tests/
+src/
+*. نlog
+.env
+coverage/
+.nyc_output/
+*.tsbuildinfo
+tsconfig.json
+.eslintrc.cjs
+.prettierrc
+jest.config.js
+

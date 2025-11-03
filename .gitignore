@@ -1,0 +1,18 @@
+﻿# env/secrets
+**/.env
+**/.env.local
+
+# node / python
+**/node_modules/
+**/.venv/
+
+# build/output
+grants-scraper/dist/
+grants-scraper/state/
+grants-scraper/data/
+grants-web-app/data/
+coverage/
+.DS_Store
+
+# Nested repo causing add failure
+VoH/

@@ -1,0 +1,40 @@
+{
+  "data": [
+    {
+      "id": "GRANT-003",
+      "opportunityNumber": "OPP-003",
+      "title": "STEM Education Initiative",
+      "agency": "NSF",
+      "category": "Education",
+      "postedDate": "2025-02-01T12:00:00Z",
+      "closeDate": null,
+      "awardCeiling": 250000,
+      "awardFloor": 5000,
+      "eligibility": "Schools, Non-profits",
+      "synopsisUrl": "https://grants.gov/opp/003",
+      "fullTextUrl": "https://grants.gov/opp/003/full"
+    },
+    {
+      "id": "GRANT-004",
+      "opportunityNumber": "OPP-004",
+      "title": "Rural Healthcare Access",
+      "agency": "HHS",
+      "category": "Healthcare",
+      "postedDate": "2025-02-05T09:00:00Z",
+      "closeDate": "2025-08-31T23:59:59Z",
+      "awardCeiling": 2000000,
+      "awardFloor": 50000,
+      "eligibility": "Healthcare organizations",
+      "synopsisUrl": "https://grants.gov/opp/004",
+      "fullTextUrl": null
+    }
+  ],
+  "pagination": {
+    "page": 2,
+    "pageSize": 2,
+    "totalPages": 2,
+    "totalRecords": 4,
+    "nextPage": null
+  }
+}
+

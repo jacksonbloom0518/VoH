@@ -1,0 +1,40 @@
+{
+  "data": [
+    {
+      "id": "GRANT-001",
+      "opportunityNumber": "OPP-001",
+      "title": "Energy Efficiency Research Grant",
+      "agency": "DOE",
+      "category": "Research, Energy",
+      "postedDate": "2025-01-15T10:00:00Z",
+      "closeDate": "2025-06-30T23:59:59Z",
+      "awardCeiling": 500000,
+      "awardFloor": 10000,
+      "eligibility": "Universities, Non-profits",
+      "synopsisUrl": "https://grants.gov/opp/001",
+      "fullTextUrl": "https://grants.gov/opp/001/full"
+    },
+    {
+      "id": "GRANT-002",
+      "opportunityNumber": "OPP-002",
+      "title": "Climate Change Adaptation Program",
+      "agency": "EPA",
+      "category": "Environment",
+      "postedDate": "2025-01-20T08:00:00Z",
+      "closeDate": "2025-07-15T23:59:59Z",
+      "awardCeiling": 1000000,
+      "awardFloor": 25000,
+      "eligibility": "State governments, Local governments",
+      "synopsisUrl": "https://grants.gov/opp/002",
+      "fullTextUrl": "https://grants.gov/opp/002/full"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "pageSize": 2,
+    "totalPages": 2,
+    "totalRecords": 4,
+    "nextPage": 2
+  }
+}
+
