@@ -1,13 +1,25 @@
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Search, TrendingUp, Database, ArrowRight } from 'lucide-react'
+import { useQuery, useMutation } from '@tanstack/react-query'
+import { Search, TrendingUp, Database, ArrowRight, Download, CheckCircle, AlertCircle } from 'lucide-react'
 import { opportunitiesAPI } from '../lib/api'
 import { formatCurrency } from '../lib/utils'
 
 export default function HomePage() {
-  const { data: stats, isLoading } = useQuery({
+  const { data: stats, isLoading, refetch } = useQuery({
     queryKey: ['stats'],
     queryFn: opportunitiesAPI.getStats,
+  })
+
+  const fetchGrantsMutation = useMutation({
+    mutationFn: opportunitiesAPI.fetchGrantsGov,
+    onSuccess: (data) => {
+      console.log('Successfully fetched grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error fetching grants:', error)
+    },
   })
 
   const features = [
@@ -51,6 +63,71 @@ export default function HomePage() {
             <ArrowRight className="ml-2 h-5 w-5" />
           </Link>
         </div>
+      </section>
+
+      {/* Fetch Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch Latest Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Pull the latest opportunities from Grants.gov API (Categories: ISS, HL, ED, LJL, HU)
+            </p>
+          </div>
+          <button
+            onClick={() => fetchGrantsMutation.mutate()}
+            disabled={fetchGrantsMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-primary text-primary-foreground rounded-xl font-semibold hover:bg-primary/90 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {fetchGrantsMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-foreground mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Get Grants.gov Opportunities
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {fetchGrantsMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {fetchGrantsMutation.data?.message || 'Successfully fetched opportunities from Grants.gov'}
+              </div>
+              {fetchGrantsMutation.data?.opportunities && fetchGrantsMutation.data.opportunities.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {fetchGrantsMutation.data.opportunities.map((opp, idx) => (
+                    <li key={idx}>• {opp.title}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {fetchGrantsMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {fetchGrantsMutation.error?.response?.data?.message ||
+                 fetchGrantsMutation.error?.message ||
+                 'Failed to fetch opportunities. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Stats Section */}

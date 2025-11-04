@@ -32,6 +32,11 @@ export const opportunitiesAPI = {
     const response = await api.post('/sync')
     return response.data
   },
+
+  fetchGrantsGov: async (params = {}) => {
+    const response = await api.post('/fetch-grants-gov', params)
+    return response.data
+  },
 }
 
 export default api

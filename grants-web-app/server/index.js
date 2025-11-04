@@ -5,6 +5,7 @@ import initSqlJs from 'sql.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import axios from 'axios';
 
 dotenv.config();
 
@@ -303,6 +304,126 @@ app.get('/api/filters', (req, res) => {
 // POST /api/sync - Trigger data sync (calls Python scripts)
 app.post('/api/sync', async (req, res) => {
   res.json({ message: 'Sync endpoint - implement with child_process to call your Python scripts' });
+});
+
+// POST /api/fetch-grants-gov - Fetch opportunities from Grants.gov API
+app.post('/api/fetch-grants-gov', async (req, res) => {
+  try {
+    // Build the Grants.gov API request using the new search2 endpoint
+    const grantsGovUrl = 'https://api.grants.gov/v1/api/search2';
+
+    // Calculate date range: 2 years ago to today (for posted opportunities)
+    const today = new Date();
+    const twoYearsAgo = new Date();
+    twoYearsAgo.setFullYear(today.getFullYear() - 2);
+
+    // Format dates as MM/DD/YYYY for Grants.gov API
+    const formatDate = (date) => {
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${month}/${day}/${year}`;
+    };
+
+    // Request body based on user requirements
+    // Use pipe-delimited strings for multiple values
+    const requestBody = {
+      fundingCategories: 'ISS|HL|ED|LJL|HU',   // All relevant funding categories
+      oppStatuses: 'forecasted|posted',         // Opportunity statuses: forecasted (future) OR posted
+      rows: 10,                                 // Fetch 10 opportunities
+      keyword: 'trafficking OR "Office on Violence Against Women"',  // Any trafficking-related OR Office on Violence Against Women
+      startRecordNum: 0                         // Start from first record
+      // Note: Not using date filter to allow forecasted opportunities (which are future-focused)
+      // The 'posted' status will naturally include recent opportunities
+    };
+
+    console.log('Fetching from Grants.gov API with body:', JSON.stringify(requestBody, null, 2));
+
+    // Make POST request to Grants.gov API (no API key needed)
+    const response = await axios.post(grantsGovUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    // The API response has a nested structure: response.data.data.oppHits
+    const apiData = response.data?.data || {};
+
+    console.log('Grants.gov API response received:', {
+      status: response.status,
+      totalRecords: apiData.hitCount || 0,
+      oppHitsCount: apiData.oppHits?.length || 0
+    });
+
+    // Transform and insert the data into the database
+    // The search2 API returns data in 'data.oppHits' array
+    const opportunities = apiData.oppHits || [];
+    let insertedCount = 0;
+
+    console.log(`Processing ${opportunities.length} opportunities...`);
+
+    for (const opp of opportunities) {
+      try {
+        // Generate a unique ID using number field
+        const oppId = opp.number || opp.id || Date.now();
+        const id = `grantsgov-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+
+        // Transform the data to match our schema
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO opportunities (
+            id, source, source_record_url, title, summary, agency,
+            posted_date, response_deadline, raw_data, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run([
+          id,
+          'Grants.gov',
+          `https://www.grants.gov/search-results-detail/${opp.number}`,
+          opp.title || 'Untitled',
+          opp.description || opp.synopsis || '',
+          opp.agency || opp.agencyCode || null,
+          opp.openDate || new Date().toISOString(),
+          opp.closeDate || null,
+          JSON.stringify(opp),
+          new Date().toISOString()
+        ]);
+
+        stmt.free();
+        insertedCount++;
+        console.log(`Inserted: ${opp.title}`);
+      } catch (err) {
+        console.error('Error inserting opportunity:', err);
+      }
+    }
+
+    // Save the database after insertions
+    saveDatabase();
+
+    res.json({
+      success: true,
+      message: `Successfully fetched and inserted ${insertedCount} opportunities from Grants.gov`,
+      count: insertedCount,
+      totalAvailable: apiData.hitCount || 0,
+      opportunities: opportunities.map(opp => ({
+        id: opp.number || opp.id,
+        title: opp.title,
+        agency: opp.agency,
+        postedDate: opp.openDate,
+        closeDate: opp.closeDate
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error fetching from Grants.gov:', error.response?.data || error.message);
+    res.status(500).json({
+      error: 'Failed to fetch from Grants.gov API',
+      message: error.response?.data?.message || error.message,
+      details: error.response?.data
+    });
+  }
 });
 
 // Health check
