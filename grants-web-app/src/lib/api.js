@@ -37,6 +37,11 @@ export const opportunitiesAPI = {
     const response = await api.post('/fetch-grants-gov', params)
     return response.data
   },
+
+  scrapeLocalGrants: async () => {
+    const response = await api.post('/scrape-local-grants')
+    return response.data
+  },
 }
 
 export default api

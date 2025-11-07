@@ -20,7 +20,11 @@ async function runPythonCommand(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(PYTHON_PATH, ['-m', ...args], {
       cwd: PIPELINE_PATH,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1',
+      },
     });
 
     let stdout = '';
@@ -28,12 +32,12 @@ async function runPythonCommand(args) {
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
-      process.stdout.write(data);
+      // Suppress streaming to console to avoid massive output/timeouts
     });
 
     proc.stderr.on('data', (data) => {
       stderr += data.toString();
-      process.stderr.write(data);
+      // Suppress streaming to console
     });
 
     proc.on('close', (code) => {
@@ -55,8 +59,8 @@ async function runNodeCommand(command, args, cwd) {
     });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', d => { stdout += d.toString(); process.stdout.write(d); });
-    proc.stderr.on('data', d => { stderr += d.toString(); process.stderr.write(d); });
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
     proc.on('close', code => {
       if (code === 0) resolve(stdout); else reject(new Error(`Process exited with code ${code}\n${stderr}`));
     });
@@ -106,15 +110,19 @@ async function syncData() {
     // 3. Pull Grants.gov data with Villages of Hope filters (ISS|HL|ED|LJL|HU + eligibilities 12,13)
     console.log('\n📥 Fetching Grants.gov opportunities (Villages of Hope filters)...');
     const grantsCwd = join(PIPELINE_PATH, 'grants-scraper');
-    await runNodeCommand('node', [
-      'dist/bin/cli.js',
-      'pull',
-      '--keyword', 'trafficking OR sex trafficking OR human trafficking OR victim services OR sexual assault OR domestic violence OR survivor services OR shelter OR transitional housing OR case management OR legal aid OR counseling OR workforce reentry',
-      '--category', 'ISS,HL,ED,LJL,HU',
-      '--eligibilities', '12,13',
-      '--pageSize', '50',
-      '--maxPages', '5'
-    ], grantsCwd);
+    try {
+      await runNodeCommand('node', [
+        'dist/bin/cli.js',
+        'pull',
+        '--keyword', 'trafficking OR sex trafficking OR human trafficking OR victim services OR sexual assault OR domestic violence OR survivor services OR shelter OR transitional housing OR case management OR legal aid OR counseling OR workforce reentry',
+        '--category', 'ISS,HL,ED,LJL,HU',
+        '--eligibilities', '12,13',
+        '--pageSize', '50',
+        '--maxPages', '5'
+      ], grantsCwd);
+    } catch (e) {
+      console.warn("   ⚠ Grants.gov pull failed; will use existing opportunities.json if present.");
+    }
 
     // 4. Load data into database
     console.log('\n💾 Loading data into database...');
@@ -231,7 +239,7 @@ async function syncData() {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      for (const g of grants.slice(0, 2)) {
+      for (const g of grants) {
         const url = g.fullTextUrl || g.synopsisUrl || null;
         insertStmt.run([
           `grants-${g.id || g.opportunityNumber || Date.now()}`,

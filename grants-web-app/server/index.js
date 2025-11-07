@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import axios from 'axios';
+import { spawn } from 'child_process';
 
 dotenv.config();
 
@@ -422,6 +423,153 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
       error: 'Failed to fetch from Grants.gov API',
       message: error.response?.data?.message || error.message,
       details: error.response?.data
+    });
+  }
+});
+
+// POST /api/scrape-local-grants - Web scrape local Jacksonville/NE Florida grants
+app.post('/api/scrape-local-grants', async (req, res) => {
+  try {
+    console.log('Starting local grants web scraper...');
+
+    const scraperPath = join(__dirname, '../scraper/local_grants_scraper.py');
+
+    // Check if Python script exists
+    if (!fs.existsSync(scraperPath)) {
+      return res.status(500).json({
+        error: 'Scraper script not found',
+        message: 'The local grants scraper script is missing'
+      });
+    }
+
+    // Execute Python scraper with environment variables
+    const pythonProcess = spawn('python', [scraperPath], {
+      env: {
+        ...process.env,
+        GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+        GOOGLE_CSE_ID: process.env.GOOGLE_CSE_ID
+      }
+    });
+
+    let scriptOutput = '';
+    let scriptError = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      scriptOutput += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      scriptError += data.toString();
+      console.log('Scraper log:', data.toString());
+    });
+
+    pythonProcess.on('close', (code) => {
+      try {
+        if (code !== 0) {
+          console.error('Scraper failed with code', code);
+          console.error('Error output:', scriptError);
+          return res.status(500).json({
+            error: 'Scraper failed',
+            message: scriptError || 'The scraper encountered an error',
+            code
+          });
+        }
+
+        // Parse JSON output from Python script
+        const result = JSON.parse(scriptOutput);
+
+        if (!result.success) {
+          return res.status(500).json({
+            error: 'Scraper error',
+            message: result.error,
+            count: 0
+          });
+        }
+
+        console.log(`Scraper found ${result.count} grants. Inserting into database...`);
+
+        // Insert grants into database
+        let insertedCount = 0;
+        let skippedCount = 0;
+
+        for (const grant of result.grants) {
+          try {
+            // Check if URL already exists in database
+            const checkStmt = db.prepare('SELECT id FROM opportunities WHERE source_record_url = ?');
+            checkStmt.bind([grant.url]);
+            const exists = checkStmt.step();
+            checkStmt.free();
+
+            if (exists) {
+              skippedCount++;
+              console.log(`Skipped duplicate: ${grant.title}`);
+              continue;
+            }
+
+            // Generate unique ID
+            const id = `webscrape-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+            // Insert into database
+            const stmt = db.prepare(`
+              INSERT INTO opportunities (
+                id, source, source_record_url, title, summary,
+                posted_date, response_deadline, raw_data, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+
+            stmt.run([
+              id,
+              grant.source, // "Web Scraped - Jacksonville" or "Web Scraped - NE Florida"
+              grant.url,
+              grant.title,
+              grant.summary || '',
+              grant.found_date || new Date().toISOString(),
+              grant.deadline || null,
+              JSON.stringify(grant),
+              new Date().toISOString()
+            ]);
+
+            stmt.free();
+            insertedCount++;
+            console.log(`Inserted: ${grant.title}`);
+
+          } catch (err) {
+            console.error('Error inserting grant:', err);
+          }
+        }
+
+        // Save database
+        saveDatabase();
+
+        res.json({
+          success: true,
+          message: `Successfully scraped and inserted ${insertedCount} local grant opportunities (${skippedCount} duplicates skipped)`,
+          count: insertedCount,
+          skipped: skippedCount,
+          total: result.count,
+          grants: result.grants.map(g => ({
+            title: g.title,
+            url: g.url,
+            source: g.source,
+            deadline: g.deadline
+          }))
+        });
+
+      } catch (parseError) {
+        console.error('Error parsing scraper output:', parseError);
+        console.error('Output was:', scriptOutput);
+        return res.status(500).json({
+          error: 'Failed to parse scraper results',
+          message: parseError.message
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('Error running local grants scraper:', error);
+    res.status(500).json({
+      error: 'Failed to run local grants scraper',
+      message: error.message
     });
   }
 });

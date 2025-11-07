@@ -22,6 +22,18 @@ export default function HomePage() {
     },
   })
 
+  const scrapeLocalMutation = useMutation({
+    mutationFn: opportunitiesAPI.scrapeLocalGrants,
+    onSuccess: (data) => {
+      console.log('Successfully scraped local grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error scraping local grants:', error)
+    },
+  })
+
   const features = [
     {
       icon: Search,
@@ -124,6 +136,71 @@ export default function HomePage() {
                 {fetchGrantsMutation.error?.response?.data?.message ||
                  fetchGrantsMutation.error?.message ||
                  'Failed to fetch opportunities. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Local Scraper Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Search Local Jacksonville Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Web scrape local sources for grant opportunities in Jacksonville and Northeast Florida
+            </p>
+          </div>
+          <button
+            onClick={() => scrapeLocalMutation.mutate()}
+            disabled={scrapeLocalMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-secondary text-secondary-foreground rounded-xl font-semibold hover:bg-secondary/90 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {scrapeLocalMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-secondary-foreground mr-2" />
+                Searching...
+              </>
+            ) : (
+              <>
+                <Search className="mr-2 h-5 w-5" />
+                Search Local Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {scrapeLocalMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {scrapeLocalMutation.data?.message || 'Successfully scraped local grant opportunities'}
+              </div>
+              {scrapeLocalMutation.data?.grants && scrapeLocalMutation.data.grants.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {scrapeLocalMutation.data.grants.map((grant, idx) => (
+                    <li key={idx}>• {grant.title} ({grant.source})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {scrapeLocalMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {scrapeLocalMutation.error?.response?.data?.message ||
+                 scrapeLocalMutation.error?.message ||
+                 'Failed to scrape local grants. Please try again.'}
               </div>
             </div>
           </div>
