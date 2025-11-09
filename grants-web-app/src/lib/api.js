@@ -38,8 +38,43 @@ export const opportunitiesAPI = {
     return response.data
   },
 
-  scrapeLocalGrants: async () => {
-    const response = await api.post('/scrape-local-grants')
+  scrapeLocalGrants: async ({ limit = 2, location } = {}) => {
+    const response = await api.post('/scrape-local-grants', { limit, location })
+    return response.data
+  },
+
+  scrapeOVWGrants: async ({ limit = 20, location } = {}) => {
+    const response = await api.post('/scrape-ovw', { limit, location })
+    return response.data
+  },
+
+  scrapeACFGrants: async ({ limit = 20, location } = {}) => {
+    const response = await api.post('/scrape-acf', { limit, location })
+    return response.data
+  },
+
+  fetchGrantsForecasts: async (params = {}) => {
+    const response = await api.post('/fetch-grants-forecasts', params)
+    return response.data
+  },
+
+  fetchHUDGrants: async (params = {}) => {
+    const response = await api.post('/fetch-hud-grants', params)
+    return response.data
+  },
+
+  fetchSAMHSAGrants: async (params = {}) => {
+    const response = await api.post('/fetch-samhsa-grants', params)
+    return response.data
+  },
+
+  scrapeFloridaDCF: async ({ limit = 20, location } = {}) => {
+    const response = await api.post('/scrape-florida-dcf', { limit, location })
+    return response.data
+  },
+
+  scrapeJaxFoundation: async ({ limit = 10, location } = {}) => {
+    const response = await api.post('/scrape-jax-foundation', { limit, location })
     return response.data
   },
 }

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { Search, TrendingUp, Database, ArrowRight, Download, CheckCircle, AlertCircle } from 'lucide-react'
@@ -5,6 +6,7 @@ import { opportunitiesAPI } from '../lib/api'
 import { formatCurrency } from '../lib/utils'
 
 export default function HomePage() {
+  const [location, setLocation] = useState('Jacksonville, FL')
   const { data: stats, isLoading, refetch } = useQuery({
     queryKey: ['stats'],
     queryFn: opportunitiesAPI.getStats,
@@ -31,6 +33,90 @@ export default function HomePage() {
     },
     onError: (error) => {
       console.error('Error scraping local grants:', error)
+    },
+  })
+
+  const scrapeOVWMutation = useMutation({
+    mutationFn: opportunitiesAPI.scrapeOVWGrants,
+    onSuccess: (data) => {
+      console.log('Successfully scraped OVW grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error scraping OVW grants:', error)
+    },
+  })
+
+  const scrapeACFMutation = useMutation({
+    mutationFn: opportunitiesAPI.scrapeACFGrants,
+    onSuccess: (data) => {
+      console.log('Successfully scraped ACF grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error scraping ACF grants:', error)
+    },
+  })
+
+  const fetchForecastsMutation = useMutation({
+    mutationFn: opportunitiesAPI.fetchGrantsForecasts,
+    onSuccess: (data) => {
+      console.log('Successfully fetched grant forecasts:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error fetching grant forecasts:', error)
+    },
+  })
+
+  const fetchHUDMutation = useMutation({
+    mutationFn: opportunitiesAPI.fetchHUDGrants,
+    onSuccess: (data) => {
+      console.log('Successfully fetched HUD grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error fetching HUD grants:', error)
+    },
+  })
+
+  const fetchSAMHSAMutation = useMutation({
+    mutationFn: opportunitiesAPI.fetchSAMHSAGrants,
+    onSuccess: (data) => {
+      console.log('Successfully fetched SAMHSA grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error fetching SAMHSA grants:', error)
+    },
+  })
+
+  const scrapeFloridaDCFMutation = useMutation({
+    mutationFn: opportunitiesAPI.scrapeFloridaDCF,
+    onSuccess: (data) => {
+      console.log('Successfully scraped Florida DCF grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error scraping Florida DCF grants:', error)
+    },
+  })
+
+  const scrapeJaxFoundationMutation = useMutation({
+    mutationFn: opportunitiesAPI.scrapeJaxFoundation,
+    onSuccess: (data) => {
+      console.log('Successfully scraped Jacksonville Foundation grants:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error scraping Jacksonville Foundation grants:', error)
     },
   })
 
@@ -142,6 +228,470 @@ export default function HomePage() {
         )}
       </section>
 
+      {/* Grant Forecasts Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch Grant Forecasts
+            </h3>
+            <p className="text-muted-foreground">
+              Pull upcoming forecasted grant opportunities from Grants.gov - grants that haven't opened yet but are planned for future release
+            </p>
+          </div>
+          <button
+            onClick={() => fetchForecastsMutation.mutate()}
+            disabled={fetchForecastsMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-orange-600 text-white rounded-xl font-semibold hover:bg-orange-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {fetchForecastsMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch Forecasts
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {fetchForecastsMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {fetchForecastsMutation.data?.message || 'Successfully fetched grant forecasts'}
+              </div>
+              {fetchForecastsMutation.data?.opportunities && fetchForecastsMutation.data.opportunities.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {fetchForecastsMutation.data.opportunities.slice(0, 5).map((opp, idx) => (
+                    <li key={idx}>• {opp.title} ({opp.agency})</li>
+                  ))}
+                  {fetchForecastsMutation.data.opportunities.length > 5 && (
+                    <li className="font-semibold">...and {fetchForecastsMutation.data.opportunities.length - 5} more</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {fetchForecastsMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {fetchForecastsMutation.error?.response?.data?.message ||
+                 fetchForecastsMutation.error?.message ||
+                 'Failed to fetch grant forecasts. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* OVW Grants Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch DOJ Office on Violence Against Women (OVW) Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Scrape current funding opportunities from the DOJ Office on Violence Against Women - the primary federal funder for trafficking and domestic violence victim services
+            </p>
+          </div>
+          <button
+            onClick={() => scrapeOVWMutation.mutate({ limit: 20, location })}
+            disabled={scrapeOVWMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-purple-600 text-white rounded-xl font-semibold hover:bg-purple-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {scrapeOVWMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch OVW Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {scrapeOVWMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {scrapeOVWMutation.data?.message || 'Successfully fetched OVW grant opportunities'}
+              </div>
+              {scrapeOVWMutation.data?.grants && scrapeOVWMutation.data.grants.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {scrapeOVWMutation.data.grants.map((grant, idx) => (
+                    <li key={idx}>• {grant.title} ({grant.source})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {scrapeOVWMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {scrapeOVWMutation.error?.response?.data?.message ||
+                 scrapeOVWMutation.error?.message ||
+                 'Failed to fetch OVW grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ACF Grants Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch HHS ACF OFVPS Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Scrape current funding opportunities from HHS Administration for Children and Families - Office of Family Violence Prevention and Services for domestic violence shelters and services
+            </p>
+          </div>
+          <button
+            onClick={() => scrapeACFMutation.mutate({ limit: 20, location })}
+            disabled={scrapeACFMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {scrapeACFMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch ACF Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {scrapeACFMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {scrapeACFMutation.data?.message || 'Successfully fetched ACF grant opportunities'}
+              </div>
+              {scrapeACFMutation.data?.grants && scrapeACFMutation.data.grants.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {scrapeACFMutation.data.grants.map((grant, idx) => (
+                    <li key={idx}>• {grant.title} ({grant.source})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {scrapeACFMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {scrapeACFMutation.error?.response?.data?.message ||
+                 scrapeACFMutation.error?.message ||
+                 'Failed to fetch ACF grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* HUD Grants Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch HUD Housing Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Pull housing and transitional housing grants from HUD (Department of Housing and Urban Development) for domestic violence and trafficking victims
+            </p>
+          </div>
+          <button
+            onClick={() => fetchHUDMutation.mutate()}
+            disabled={fetchHUDMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-green-600 text-white rounded-xl font-semibold hover:bg-green-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {fetchHUDMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch HUD Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {fetchHUDMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {fetchHUDMutation.data?.message || 'Successfully fetched HUD grant opportunities'}
+              </div>
+              {fetchHUDMutation.data?.opportunities && fetchHUDMutation.data.opportunities.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {fetchHUDMutation.data.opportunities.slice(0, 5).map((opp, idx) => (
+                    <li key={idx}>• {opp.title}</li>
+                  ))}
+                  {fetchHUDMutation.data.opportunities.length > 5 && (
+                    <li className="font-semibold">...and {fetchHUDMutation.data.opportunities.length - 5} more</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {fetchHUDMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {fetchHUDMutation.error?.response?.data?.message ||
+                 fetchHUDMutation.error?.message ||
+                 'Failed to fetch HUD grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* SAMHSA Grants Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch SAMHSA Mental Health Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Pull behavioral health and trauma-informed grants from SAMHSA (Substance Abuse and Mental Health Services Administration) for victims of violence and trafficking
+            </p>
+          </div>
+          <button
+            onClick={() => fetchSAMHSAMutation.mutate()}
+            disabled={fetchSAMHSAMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-teal-600 text-white rounded-xl font-semibold hover:bg-teal-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {fetchSAMHSAMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch SAMHSA Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {fetchSAMHSAMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {fetchSAMHSAMutation.data?.message || 'Successfully fetched SAMHSA grant opportunities'}
+              </div>
+              {fetchSAMHSAMutation.data?.opportunities && fetchSAMHSAMutation.data.opportunities.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {fetchSAMHSAMutation.data.opportunities.slice(0, 5).map((opp, idx) => (
+                    <li key={idx}>• {opp.title}</li>
+                  ))}
+                  {fetchSAMHSAMutation.data.opportunities.length > 5 && (
+                    <li className="font-semibold">...and {fetchSAMHSAMutation.data.opportunities.length - 5} more</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {fetchSAMHSAMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {fetchSAMHSAMutation.error?.response?.data?.message ||
+                 fetchSAMHSAMutation.error?.message ||
+                 'Failed to fetch SAMHSA grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Florida DCF Grants Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch Florida DCF Domestic Violence Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Scrape current funding opportunities from Florida Department of Children and Families - Office of Domestic Violence for state-level DV grants
+            </p>
+          </div>
+          <button
+            onClick={() => scrapeFloridaDCFMutation.mutate({ limit: 20, location })}
+            disabled={scrapeFloridaDCFMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {scrapeFloridaDCFMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch Florida DCF Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {scrapeFloridaDCFMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {scrapeFloridaDCFMutation.data?.message || 'Successfully fetched Florida DCF grant opportunities'}
+              </div>
+              {scrapeFloridaDCFMutation.data?.grants && scrapeFloridaDCFMutation.data.grants.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {scrapeFloridaDCFMutation.data.grants.map((grant, idx) => (
+                    <li key={idx}>• {grant.title} ({grant.source})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {scrapeFloridaDCFMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {scrapeFloridaDCFMutation.error?.response?.data?.message ||
+                 scrapeFloridaDCFMutation.error?.message ||
+                 'Failed to fetch Florida DCF grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Jacksonville Foundation Grants Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch Jacksonville Foundation Grants
+            </h3>
+            <p className="text-muted-foreground">
+              Scrape current funding opportunities from Community Foundation for Northeast Florida including Women's Giving Alliance grants for local nonprofits
+            </p>
+          </div>
+          <button
+            onClick={() => scrapeJaxFoundationMutation.mutate({ limit: 10, location })}
+            disabled={scrapeJaxFoundationMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-pink-600 text-white rounded-xl font-semibold hover:bg-pink-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {scrapeJaxFoundationMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch Foundation Grants
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {scrapeJaxFoundationMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {scrapeJaxFoundationMutation.data?.message || 'Successfully fetched foundation grant opportunities'}
+              </div>
+              {scrapeJaxFoundationMutation.data?.grants && scrapeJaxFoundationMutation.data.grants.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {scrapeJaxFoundationMutation.data.grants.map((grant, idx) => (
+                    <li key={idx}>• {grant.title} ({grant.source})</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {scrapeJaxFoundationMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {scrapeJaxFoundationMutation.error?.response?.data?.message ||
+                 scrapeJaxFoundationMutation.error?.message ||
+                 'Failed to fetch foundation grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* Local Scraper Button Section */}
       <section className="bg-card rounded-2xl shadow-apple p-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
@@ -154,7 +704,7 @@ export default function HomePage() {
             </p>
           </div>
           <button
-            onClick={() => scrapeLocalMutation.mutate()}
+            onClick={() => scrapeLocalMutation.mutate({ limit: 2, location })}
             disabled={scrapeLocalMutation.isPending}
             className="inline-flex items-center px-6 py-3 bg-secondary text-secondary-foreground rounded-xl font-semibold hover:bg-secondary/90 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
@@ -171,6 +721,17 @@ export default function HomePage() {
             )}
           </button>
         </div>
+        <label className="mt-4 block text-sm text-muted-foreground">
+          Location focus
+          <input
+            type="text"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            className="mt-1 w-full md:w-80 px-4 py-2 bg-background border border-border rounded-xl focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+            placeholder="City, State or ZIP"
+            aria-label="Location to focus scraping"
+          />
+        </label>
 
         {/* Success/Error Messages */}
         {scrapeLocalMutation.isSuccess && (

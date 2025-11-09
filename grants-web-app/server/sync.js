@@ -194,29 +194,44 @@ async function syncData() {
         const pop = opp.place_of_performance || {};
         const poc = opp.point_of_contact || {};
         const award = opp.award_info || {};
+
+        // DEFENSIVE: Ensure required NOT NULL fields are present
+        const source = opp.source || 'sam'; // Fallback to 'sam'
+        const title = opp.title || 'Untitled Opportunity'; // Fallback to 'Untitled Opportunity'
+
+        // Validate before INSERT
+        if (!source || source === '') {
+          console.error('❌ Skipping SAM opportunity with empty source:', JSON.stringify(opp, null, 2));
+          continue;
+        }
+        if (!title || title === '') {
+          console.error('❌ Skipping SAM opportunity with empty title:', JSON.stringify(opp, null, 2));
+          continue;
+        }
+
         insertStmt.run([
-          `${opp.source}-${opp.source_record_url || Date.now()}`,
-          opp.source || 'sam',
-          opp.source_record_url || null,
-          opp.title || 'Untitled',
+          `${source}-${opp.source_record_url || Date.now()}`,
+          source,
+          opp.source_record_url || '',
+          title,
           opp.summary || '',
-          opp.agency || null,
-          opp.posted_date || null,
-          opp.response_deadline || null,
-          opp.naics || null,
-          opp.psc || null,
-          opp.set_aside || null,
-          pop.city || null,
-          pop.state || null,
-          pop.zip || null,
-          pop.country || null,
-          poc.name || null,
-          poc.email || null,
-          poc.phone || null,
-          award.number || null,
+          opp.agency || '',
+          opp.posted_date || '',
+          opp.response_deadline || '',
+          opp.naics || '',
+          opp.psc || '',
+          opp.set_aside || '',
+          pop.city || '',
+          pop.state || '',
+          pop.zip || '',
+          pop.country || '',
+          poc.name || '',
+          poc.email || '',
+          poc.phone || '',
+          award.number || '',
           award.amount || null,
-          award.date || null,
-          award.awardee || null,
+          award.date || '',
+          award.awardee || '',
           JSON.stringify(opp.raw || {}),
         ]);
       }
@@ -240,16 +255,30 @@ async function syncData() {
       `);
 
       for (const g of grants) {
-        const url = g.fullTextUrl || g.synopsisUrl || null;
+        // DEFENSIVE: Ensure required NOT NULL fields are present
+        const source = 'grants'; // Always set to 'grants'
+        const title = g.title || 'Untitled Opportunity'; // Fallback to 'Untitled Opportunity'
+
+        // Validate before INSERT
+        if (!source || source === '') {
+          console.error('❌ Skipping Grants.gov opportunity with empty source:', JSON.stringify(g, null, 2));
+          continue;
+        }
+        if (!title || title === '') {
+          console.error('❌ Skipping Grants.gov opportunity with empty title:', JSON.stringify(g, null, 2));
+          continue;
+        }
+
+        const url = g.fullTextUrl || g.synopsisUrl || '';
         insertStmt.run([
           `grants-${g.id || g.opportunityNumber || Date.now()}`,
-          'grants',
+          source,
           url,
-          g.title || 'Untitled',
+          title,
           '',
-          g.agency || null,
-          g.postedDate || null,
-          g.closeDate || null,
+          g.agency || '',
+          g.postedDate || '',
+          g.closeDate || '',
           g.awardCeiling || null,
           JSON.stringify(g),
         ]);
@@ -279,25 +308,39 @@ async function syncData() {
         const pop = award.place_of_performance || {};
         const poc = award.point_of_contact || {};
         const amounts = award.amounts || {};
-        
+
+        // DEFENSIVE: Ensure required NOT NULL fields are present
+        const source = 'usaspending'; // Always set to 'usaspending'
+        const title = award.title || award.description?.substring(0, 100) || 'Untitled Award'; // Fallback chain
+
+        // Validate before INSERT
+        if (!source || source === '') {
+          console.error('❌ Skipping USAspending award with empty source:', JSON.stringify(award, null, 2));
+          continue;
+        }
+        if (!title || title === '') {
+          console.error('❌ Skipping USAspending award with empty title:', JSON.stringify(award, null, 2));
+          continue;
+        }
+
         insertStmt.run([
           `usaspending-${award.award_id}`,
-          'usaspending',
-          (award.usaspending_links || {}).award_page || null,
-          award.title || award.description?.substring(0, 100) || 'Untitled Award',
+          source,
+          (award.usaspending_links || {}).award_page || '',
+          title,
           award.description || '',
-          (award.awarding_agency || {}).toptier || null,
-          award.action_date || null,
-          null,
-          (award.assistance_listing || {}).aln || null,
-          null,
-          pop.city || null,
-          pop.state || null,
-          pop.country || null,
-          poc.name || null,
-          poc.email || null,
-          poc.phone || null,
-          award.fain || award.award_id || null,
+          (award.awarding_agency || {}).toptier || '',
+          award.action_date || '',
+          '',
+          (award.assistance_listing || {}).aln || '',
+          '',
+          pop.city || '',
+          pop.state || '',
+          pop.country || '',
+          poc.name || '',
+          poc.email || '',
+          poc.phone || '',
+          award.fain || award.award_id || '',
           amounts.latest_transaction_obligation || amounts.total_obligated || null,
           award.relevance_score || null,
           JSON.stringify(award.topic_hits || []),

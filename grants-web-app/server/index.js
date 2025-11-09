@@ -6,7 +6,21 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import axios from 'axios';
-import { spawn } from 'child_process';
+import robotsParser from 'robots-parser';
+import { readCsvIndex, appendCsvRows, CSV_HEADERS } from './csv.js';
+import {
+  analyzeGrantPage,
+  selectTopOpportunities,
+  normalizeKey,
+  shouldSkipOpportunity,
+  isPdfContent,
+  isAllowedDomain,
+  createStableId,
+} from './grantness.js';
+import { scrapeOVWGrants } from '../scraper/ovw-scraper.js';
+import { scrapeACFGrants } from '../scraper/acf-scraper.js';
+import { scrapeFloridaDCFGrants } from '../scraper/florida-dcf-scraper.js';
+import { scrapeJaxFoundationGrants } from '../scraper/jax-foundation-scraper.js';
 
 dotenv.config();
 
@@ -18,19 +32,28 @@ const PORT = process.env.PORT || 5000;
 
 // Database setup with sql.js
 const dbPath = process.env.DATABASE_PATH || join(__dirname, '../data/grants.db');
+const csvPath = join(__dirname, '../../grants-scraper/data/opportunities.csv');
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0 Safari/537.36',
+];
+const robotsCache = new Map();
 let db;
 
 async function initDatabase() {
   const SQL = await initSqlJs();
-  
-  // Try to load existing database or create new
+
+  // Load existing database if it exists, otherwise create new one
   if (fs.existsSync(dbPath)) {
     const buffer = fs.readFileSync(dbPath);
     db = new SQL.Database(buffer);
+    console.log('📦 Loaded existing database');
   } else {
     db = new SQL.Database();
+    console.log('📦 Created new database');
   }
-  
+
   return db;
 }
 
@@ -50,43 +73,317 @@ function saveDatabase() {
 
 // Initialize database schema
 function initSchema() {
-  db.run(`
-  CREATE TABLE IF NOT EXISTS opportunities (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,
-    source_record_url TEXT,
-    title TEXT NOT NULL,
-    summary TEXT,
-    agency TEXT,
-    posted_date TEXT,
-    response_deadline TEXT,
-    naics TEXT,
-    psc TEXT,
-    set_aside TEXT,
-    pop_city TEXT,
-    pop_state TEXT,
-    pop_zip TEXT,
-    pop_country TEXT,
-    poc_name TEXT,
-    poc_email TEXT,
-    poc_phone TEXT,
-    award_number TEXT,
-    award_amount REAL,
-    award_date TEXT,
-    award_awardee TEXT,
-    relevance_score REAL,
-    topic_hits TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    raw_data TEXT
-  );
+  // sql.js doesn't support multi-statement execution with db.run()
+  // We need to run each statement separately
 
-  CREATE INDEX IF NOT EXISTS idx_source ON opportunities(source);
-  CREATE INDEX IF NOT EXISTS idx_agency ON opportunities(agency);
-  CREATE INDEX IF NOT EXISTS idx_posted_date ON opportunities(posted_date);
-  CREATE INDEX IF NOT EXISTS idx_deadline ON opportunities(response_deadline);
-  CREATE INDEX IF NOT EXISTS idx_relevance ON opportunities(relevance_score);
+  // Create table if it doesn't exist
+  // NOTE: Removed NOT NULL constraints due to sql.js bug with prepared statements
+  // Data integrity is enforced in application code instead
+  db.run(`
+    CREATE TABLE IF NOT EXISTS opportunities (
+      id TEXT PRIMARY KEY,
+      source TEXT,
+      source_record_url TEXT,
+      title TEXT,
+      summary TEXT,
+      agency TEXT,
+      posted_date TEXT,
+      response_deadline TEXT,
+      naics TEXT,
+      psc TEXT,
+      set_aside TEXT,
+      pop_city TEXT,
+      pop_state TEXT,
+      pop_zip TEXT,
+      pop_country TEXT,
+      poc_name TEXT,
+      poc_email TEXT,
+      poc_phone TEXT,
+      award_number TEXT,
+      award_amount REAL,
+      award_date TEXT,
+      award_awardee TEXT,
+      relevance_score REAL,
+      topic_hits TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      raw_data TEXT
+    )
   `);
+
+  // Create indexes separately
+  db.run(`CREATE INDEX IF NOT EXISTS idx_source ON opportunities(source)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_agency ON opportunities(agency)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_posted_date ON opportunities(posted_date)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_deadline ON opportunities(response_deadline)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_relevance ON opportunities(relevance_score)`);
+
+  console.log('✅ Database schema initialized');
   saveDatabase();
+}
+
+
+function getDbIndex() {
+  const urlSet = new Set();
+  const keySet = new Set();
+  const stmt = db.prepare('SELECT source_record_url, title, agency, response_deadline FROM opportunities');
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    if (row.source_record_url) {
+      urlSet.add(row.source_record_url);
+    }
+    keySet.add(normalizeKey(row.title, row.agency, row.response_deadline));
+  }
+  stmt.free();
+  return { urlSet, keySet };
+}
+
+function insertOpportunitiesIntoDb(records = []) {
+  if (!records.length) return;
+  const columns = CSV_HEADERS;
+  const placeholders = columns.map(() => '?').join(', ');
+  const sqlStatement = `INSERT OR REPLACE INTO opportunities (${columns.join(', ')}) VALUES (${placeholders})`;
+
+  // DEBUG: Log the SQL statement and columns being used
+  console.log('   📊 INSERT SQL:', sqlStatement);
+  console.log('   📊 Columns:', columns);
+  console.log('   📊 Column count:', columns.length);
+
+  const stmt = db.prepare(sqlStatement);
+
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+
+    // Critical validation: ensure required NOT NULL fields are present
+    if (!record.source || record.source === '' || record.source === null || record.source === undefined) {
+      console.error(`❌ CRITICAL: Record ${i} has invalid source field!`);
+      console.error(`   Record:`, JSON.stringify(record, null, 2));
+      throw new Error(`Cannot insert record with missing 'source' field (NOT NULL constraint). Record: ${record.title || 'Unknown'}`);
+    }
+    if (!record.title || record.title === '' || record.title === null || record.title === undefined) {
+      console.error(`❌ CRITICAL: Record ${i} has invalid title field!`);
+      console.error(`   Record:`, JSON.stringify(record, null, 2));
+      throw new Error(`Cannot insert record with missing 'title' field (NOT NULL constraint). Source: ${record.source || 'Unknown'}`);
+    }
+
+    // Map columns to values, with fallback to empty string
+    const values = columns.map((column, idx) => {
+      const value = record[column];
+      // For required NOT NULL columns, we've already validated above
+      // For other columns, null/undefined becomes empty string
+      if (value === null || value === undefined) {
+        return '';
+      }
+      return value;
+    });
+
+    // DEBUG: Log first 3 columns and their values
+    console.log(`   📊 First 3 column-value pairs:`,
+      columns.slice(0, 3).map((col, idx) => `${col}=${values[idx]}`).join(', '));
+
+    try {
+      // Try using bind() then step() instead of run()
+      stmt.bind(values);
+      stmt.step();
+      stmt.reset();
+    } catch (err) {
+      console.error(`❌ SQL INSERT failed for record ${i}:`, err.message);
+      console.error(`   Record:`, JSON.stringify(record, null, 2));
+      console.error(`   Values:`, values);
+      console.error(`   Values length:`, values.length);
+      throw err;
+    }
+  }
+
+  stmt.free();
+}
+
+function hydrateRecord(record) {
+  const hydrated = { ...record };
+
+  // CRITICAL: Ensure source field is ALWAYS set (NOT NULL constraint)
+  // Try to extract from source_record_url first
+  if (hydrated.source_record_url) {
+    try {
+      const parsed = new URL(hydrated.source_record_url);
+      if (!hydrated.source || hydrated.source === '' || hydrated.source === null || hydrated.source === undefined) {
+        hydrated.source = parsed.hostname;
+      }
+      if (!hydrated.id) hydrated.id = createStableId(parsed.href);
+    } catch {
+      // fall through to defaults
+    }
+  }
+
+  // Fallback #1: Use 'web-scraped' if source is still missing
+  if (!hydrated.source || hydrated.source === '' || hydrated.source === null || hydrated.source === undefined) {
+    hydrated.source = 'web-scraped';
+  }
+
+  // Fallback #2: Last resort - use 'unknown' (should never reach here)
+  if (!hydrated.source || hydrated.source === '') {
+    console.warn('⚠️  WARNING: Source field was still empty after fallbacks, using "unknown"');
+    hydrated.source = 'unknown';
+  }
+
+  // Ensure ID is set
+  if (!hydrated.id) {
+    hydrated.id = createStableId(
+      `${hydrated.title || 'opportunity'}-${hydrated.agency || 'unknown'}-${Date.now()}-${Math.random()}`
+    );
+  }
+
+  // CRITICAL: Ensure title field is ALWAYS set (NOT NULL constraint)
+  if (!hydrated.title || hydrated.title === '' || hydrated.title === null || hydrated.title === undefined) {
+    console.warn('⚠️  WARNING: Title field was empty, using "Untitled Opportunity"');
+    hydrated.title = 'Untitled Opportunity';
+  }
+
+  // Fill in all other CSV_HEADERS fields with empty string if undefined/null
+  CSV_HEADERS.forEach((header) => {
+    if (hydrated[header] === undefined || hydrated[header] === null) {
+      hydrated[header] = '';
+    }
+  });
+
+  return hydrated;
+}
+
+const BASE_QUERY =
+  'site:.gov (grant OR funding) (apply OR application) (trafficking OR "violence against women" OR survivors OR "victim services" OR shelter OR "domestic violence")';
+
+function buildSearchQueries(location = '') {
+  const queries = [BASE_QUERY, `${BASE_QUERY} ("victim services" OR "survivor services")`];
+  if (location) {
+    queries.push(`${BASE_QUERY} ("${location}" OR Florida OR FL)`);
+  }
+  return queries;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function randomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+async function fetchSerpResults(query) {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  const cseId = process.env.GOOGLE_CSE_ID;
+  if (!apiKey || !cseId) {
+    throw new Error('Missing Google API credentials for local scraping');
+  }
+  const url = 'https://customsearch.googleapis.com/customsearch/v1';
+  const response = await axios.get(url, {
+    params: {
+      key: apiKey,
+      cx: cseId,
+      q: query,
+      num: 10,
+      safe: 'active',
+    },
+    timeout: 10000,
+  });
+  return (
+    response.data?.items?.map((item) => ({
+      link: item.link,
+      title: item.title,
+      snippet: item.snippet,
+    })) || []
+  );
+}
+
+async function isAllowedByRobots(url) {
+  try {
+    const parsed = new URL(url);
+    const origin = `${parsed.protocol}//${parsed.host}`;
+    if (!robotsCache.has(origin)) {
+      const robotsUrl = `${origin}/robots.txt`;
+      const robotsResponse = await axios.get(robotsUrl, { timeout: 5000 });
+      robotsCache.set(origin, robotsParser(robotsUrl, robotsResponse.data));
+    }
+    const parser = robotsCache.get(origin);
+    return parser ? parser.isAllowed(url, randomUserAgent()) : true;
+  } catch (error) {
+    return true;
+  }
+}
+
+async function fetchPageHtml(url) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await axios.get(url, {
+        headers: {
+          'User-Agent': randomUserAgent(),
+          Accept: 'text/html,application/xhtml+xml',
+        },
+        timeout: 15000,
+      });
+      const contentType = response.headers['content-type'] || '';
+      if (isPdfContent(url, contentType)) {
+        return { isPdf: true };
+      }
+      return { html: response.data, contentType };
+    } catch (error) {
+      const status = error.response?.status;
+      if (status === 404 || status === 403) {
+        return null;
+      }
+      if (status === 429) {
+        await delay((attempt + 1) * 600);
+        continue;
+      }
+      if (attempt === 2) throw error;
+      await delay((attempt + 1) * 400);
+    }
+  }
+  return null;
+}
+
+async function evaluateCandidate(candidate, location, dedupeSets) {
+  if (!candidate?.link) return null;
+  let normalizedUrl;
+  try {
+    normalizedUrl = new URL(candidate.link).href;
+  } catch {
+    return null;
+  }
+  const hostname = new URL(normalizedUrl).hostname.toLowerCase();
+  if (!isAllowedDomain(hostname)) return null;
+  if (dedupeSets.urlSet.has(normalizedUrl)) return null;
+  if (!(await isAllowedByRobots(normalizedUrl))) return null;
+  await delay(250 + Math.random() * 400);
+  const page = await fetchPageHtml(normalizedUrl);
+  if (!page || page.isPdf) return null;
+  const opportunity = analyzeGrantPage({
+    url: normalizedUrl,
+    html: page.html,
+    snippet: candidate.snippet,
+    locationHint: location,
+  });
+  if (!opportunity.isGrant) return null;
+  if (shouldSkipOpportunity(opportunity, dedupeSets)) return null;
+  dedupeSets.urlSet.add(opportunity.source_record_url);
+  dedupeSets.keySet.add(normalizeKey(opportunity.title, opportunity.agency, opportunity.response_deadline));
+  return opportunity;
+}
+
+async function collectLocalOpportunities({ location, dedupeSets, limit }) {
+  const queries = buildSearchQueries(location);
+  const candidates = [];
+  for (const query of queries) {
+    const serpResults = await fetchSerpResults(query);
+    for (const candidate of serpResults) {
+      const opportunity = await evaluateCandidate(candidate, location, dedupeSets);
+      if (opportunity) {
+        candidates.push(opportunity);
+        if (candidates.length >= limit * 3) {
+          return candidates;
+        }
+      }
+    }
+  }
+  return candidates;
 }
 
 // API Routes
@@ -189,11 +486,24 @@ app.get('/api/opportunities', (req, res) => {
     stmt.free();
 
     res.json({
-      data: opportunities.map(opp => ({
-        ...opp,
-        topic_hits: opp.topic_hits ? JSON.parse(opp.topic_hits) : [],
-        raw_data: undefined, // Exclude raw_data from list view
-      })),
+      data: opportunities.map(opp => {
+        // Handle topic_hits: can be JSON array or semicolon-separated string
+        let topicHits = [];
+        if (opp.topic_hits) {
+          try {
+            topicHits = JSON.parse(opp.topic_hits);
+          } catch {
+            // If not valid JSON, treat as semicolon-separated string
+            topicHits = opp.topic_hits.split(';').map(s => s.trim()).filter(Boolean);
+          }
+        }
+
+        return {
+          ...opp,
+          topic_hits: topicHits,
+          raw_data: undefined, // Exclude raw_data from list view
+        };
+      }),
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -222,10 +532,32 @@ app.get('/api/opportunities/:id', (req, res) => {
     const opportunity = stmt.getAsObject();
     stmt.free();
 
+    // Handle topic_hits: can be JSON array or semicolon-separated string
+    let topicHits = [];
+    if (opportunity.topic_hits) {
+      try {
+        topicHits = JSON.parse(opportunity.topic_hits);
+      } catch {
+        // If not valid JSON, treat as semicolon-separated string
+        topicHits = opportunity.topic_hits.split(';').map(s => s.trim()).filter(Boolean);
+      }
+    }
+
+    // Handle raw_data: should be JSON
+    let rawData = null;
+    if (opportunity.raw_data) {
+      try {
+        rawData = JSON.parse(opportunity.raw_data);
+      } catch {
+        // If parsing fails, keep as string or null
+        rawData = opportunity.raw_data;
+      }
+    }
+
     res.json({
       ...opportunity,
-      topic_hits: opportunity.topic_hits ? JSON.parse(opportunity.topic_hits) : [],
-      raw_data: opportunity.raw_data ? JSON.parse(opportunity.raw_data) : null,
+      topic_hits: topicHits,
+      raw_data: rawData,
     });
   } catch (error) {
     console.error('Error fetching opportunity:', error);
@@ -371,6 +703,21 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
         const oppId = opp.number || opp.id || Date.now();
         const id = `grantsgov-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
 
+        // DEFENSIVE: Ensure required NOT NULL fields are present
+        const source = 'Grants.gov'; // Always set
+        const title = opp.title || opp.opportunityTitle || 'Untitled Opportunity';
+        const source_record_url = opp.number
+          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+          : `https://www.grants.gov/`;
+
+        // Validate before INSERT
+        if (!source || source === '') {
+          throw new Error('Source field cannot be empty');
+        }
+        if (!title || title === '') {
+          throw new Error('Title field cannot be empty');
+        }
+
         // Transform the data to match our schema
         const stmt = db.prepare(`
           INSERT OR REPLACE INTO opportunities (
@@ -381,22 +728,23 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
 
         stmt.run([
           id,
-          'Grants.gov',
-          `https://www.grants.gov/search-results-detail/${opp.number}`,
-          opp.title || 'Untitled',
+          source,
+          source_record_url,
+          title,
           opp.description || opp.synopsis || '',
-          opp.agency || opp.agencyCode || null,
+          opp.agency || opp.agencyCode || '',
           opp.openDate || new Date().toISOString(),
-          opp.closeDate || null,
+          opp.closeDate || '',
           JSON.stringify(opp),
           new Date().toISOString()
         ]);
 
         stmt.free();
         insertedCount++;
-        console.log(`Inserted: ${opp.title}`);
+        console.log(`✅ Inserted: ${title}`);
       } catch (err) {
-        console.error('Error inserting opportunity:', err);
+        console.error('❌ Error inserting opportunity:', err.message);
+        console.error('   Opportunity data:', JSON.stringify(opp, null, 2));
       }
     }
 
@@ -427,149 +775,687 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
   }
 });
 
-// POST /api/scrape-local-grants - Web scrape local Jacksonville/NE Florida grants
-app.post('/api/scrape-local-grants', async (req, res) => {
+// POST /api/fetch-grants-forecasts - Fetch FORECASTED opportunities from Grants.gov API
+app.post('/api/fetch-grants-forecasts', async (req, res) => {
   try {
-    console.log('Starting local grants web scraper...');
+    const grantsGovUrl = 'https://api.grants.gov/v1/api/search2';
 
-    const scraperPath = join(__dirname, '../scraper/local_grants_scraper.py');
+    // Request body targeting ONLY forecasted opportunities - HIGHLY SPECIFIC TO TRAFFICKING/DV
+    const requestBody = {
+      fundingCategories: 'ISS|LJL',              // Income Security & Social Services, Law Justice & Legal Services (NOT Health to avoid HIV grants)
+      oppStatuses: 'forecasted',                 // ONLY forecasted opportunities
+      rows: 50,                                  // Fetch more to filter down
+      keyword: '"human trafficking" OR "sex trafficking" OR "domestic violence" OR "sexual assault" OR "Office on Violence Against Women" OR VAWA OR FVPSA OR "dating violence" OR stalking',
+      startRecordNum: 0
+    };
 
-    // Check if Python script exists
-    if (!fs.existsSync(scraperPath)) {
-      return res.status(500).json({
-        error: 'Scraper script not found',
-        message: 'The local grants scraper script is missing'
-      });
+    console.log('📅 Fetching FORECASTED grants from Grants.gov API with body:', JSON.stringify(requestBody, null, 2));
+
+    // Make POST request to Grants.gov API (no API key needed)
+    const response = await axios.post(grantsGovUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    const apiData = response.data?.data || {};
+
+    console.log('Grants.gov Forecasts API response:', {
+      status: response.status,
+      totalRecords: apiData.hitCount || 0,
+      oppHitsCount: apiData.oppHits?.length || 0
+    });
+
+    // FILTER OUT IRRELEVANT TOPICS
+    const irrelevantKeywords = [
+      'hiv', 'aids', 'pepfar', 'botswana', 'ukraine', 'sierra leone', 'namibia', 'democratic republic',
+      'alzheimer', 'dementia', 'respite', 'homelessness', 'homeless', 'youth homelessness',
+      'language access', 'language services', 'translation', 'educationusa',
+      'substance abuse', 'opioid', 'drug', 'superfund', 'environmental',
+      'tuberculosis', 'tb services', 'malaria', 'global health',
+      'central america', 'kinshasa', 'haut katanga'
+    ];
+
+    const rawOpportunities = apiData.oppHits || [];
+    const opportunities = rawOpportunities.filter(opp => {
+      const searchText = `${opp.title || ''} ${opp.description || ''} ${opp.synopsis || ''} ${opp.agency || ''}`.toLowerCase();
+      const hasIrrelevantContent = irrelevantKeywords.some(keyword => searchText.includes(keyword));
+
+      if (hasIrrelevantContent) {
+        console.log(`🚫 Filtered out irrelevant forecast: ${opp.title}`);
+        return false;
+      }
+      return true;
+    });
+
+    let insertedCount = 0;
+
+    console.log(`Processing ${opportunities.length} relevant forecasted opportunities (filtered from ${rawOpportunities.length} total)...`);
+
+    for (const opp of opportunities) {
+      try {
+        // Generate a unique ID using number field
+        const oppId = opp.number || opp.id || Date.now();
+        const id = `forecast-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+
+        // DEFENSIVE: Ensure required NOT NULL fields are present
+        const source = 'Grants.gov Forecast';
+        const title = opp.title || opp.opportunityTitle || 'Untitled Forecast';
+        const source_record_url = opp.number
+          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+          : `https://www.grants.gov/`;
+
+        // Validate before INSERT
+        if (!source || source === '') {
+          throw new Error('Source field cannot be empty');
+        }
+        if (!title || title === '') {
+          throw new Error('Title field cannot be empty');
+        }
+
+        // Transform the data to match our schema
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO opportunities (
+            id, source, source_record_url, title, summary, agency,
+            posted_date, response_deadline, raw_data, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run([
+          id,
+          source,
+          source_record_url,
+          title,
+          opp.description || opp.synopsis || '',
+          opp.agency || opp.agencyCode || '',
+          opp.estimatedOpenDate || opp.openDate || '',  // Forecasts have estimated open date
+          opp.estimatedCloseDate || opp.closeDate || '',  // Forecasts have estimated close date
+          JSON.stringify(opp),
+          new Date().toISOString()
+        ]);
+
+        stmt.free();
+        insertedCount++;
+        console.log(`✅ Inserted forecast: ${title}`);
+      } catch (err) {
+        console.error('❌ Error inserting forecasted opportunity:', err.message);
+        console.error('   Opportunity data:', JSON.stringify(opp, null, 2));
+      }
     }
 
-    // Execute Python scraper with environment variables
-    const pythonProcess = spawn('python', [scraperPath], {
-      env: {
-        ...process.env,
-        GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
-        GOOGLE_CSE_ID: process.env.GOOGLE_CSE_ID
-      }
-    });
+    // Save the database after insertions
+    saveDatabase();
 
-    let scriptOutput = '';
-    let scriptError = '';
-
-    pythonProcess.stdout.on('data', (data) => {
-      scriptOutput += data.toString();
-    });
-
-    pythonProcess.stderr.on('data', (data) => {
-      scriptError += data.toString();
-      console.log('Scraper log:', data.toString());
-    });
-
-    pythonProcess.on('close', (code) => {
-      try {
-        if (code !== 0) {
-          console.error('Scraper failed with code', code);
-          console.error('Error output:', scriptError);
-          return res.status(500).json({
-            error: 'Scraper failed',
-            message: scriptError || 'The scraper encountered an error',
-            code
-          });
-        }
-
-        // Parse JSON output from Python script
-        const result = JSON.parse(scriptOutput);
-
-        if (!result.success) {
-          return res.status(500).json({
-            error: 'Scraper error',
-            message: result.error,
-            count: 0
-          });
-        }
-
-        console.log(`Scraper found ${result.count} grants. Inserting into database...`);
-
-        // Insert grants into database
-        let insertedCount = 0;
-        let skippedCount = 0;
-
-        for (const grant of result.grants) {
-          try {
-            // Check if URL already exists in database
-            const checkStmt = db.prepare('SELECT id FROM opportunities WHERE source_record_url = ?');
-            checkStmt.bind([grant.url]);
-            const exists = checkStmt.step();
-            checkStmt.free();
-
-            if (exists) {
-              skippedCount++;
-              console.log(`Skipped duplicate: ${grant.title}`);
-              continue;
-            }
-
-            // Generate unique ID
-            const id = `webscrape-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-            // Insert into database
-            const stmt = db.prepare(`
-              INSERT INTO opportunities (
-                id, source, source_record_url, title, summary,
-                posted_date, response_deadline, raw_data, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `);
-
-            stmt.run([
-              id,
-              grant.source, // "Web Scraped - Jacksonville" or "Web Scraped - NE Florida"
-              grant.url,
-              grant.title,
-              grant.summary || '',
-              grant.found_date || new Date().toISOString(),
-              grant.deadline || null,
-              JSON.stringify(grant),
-              new Date().toISOString()
-            ]);
-
-            stmt.free();
-            insertedCount++;
-            console.log(`Inserted: ${grant.title}`);
-
-          } catch (err) {
-            console.error('Error inserting grant:', err);
-          }
-        }
-
-        // Save database
-        saveDatabase();
-
-        res.json({
-          success: true,
-          message: `Successfully scraped and inserted ${insertedCount} local grant opportunities (${skippedCount} duplicates skipped)`,
-          count: insertedCount,
-          skipped: skippedCount,
-          total: result.count,
-          grants: result.grants.map(g => ({
-            title: g.title,
-            url: g.url,
-            source: g.source,
-            deadline: g.deadline
-          }))
-        });
-
-      } catch (parseError) {
-        console.error('Error parsing scraper output:', parseError);
-        console.error('Output was:', scriptOutput);
-        return res.status(500).json({
-          error: 'Failed to parse scraper results',
-          message: parseError.message
-        });
-      }
+    res.json({
+      success: true,
+      message: `Successfully fetched and inserted ${insertedCount} forecasted opportunities from Grants.gov`,
+      count: insertedCount,
+      totalAvailable: apiData.hitCount || 0,
+      opportunities: opportunities.map(opp => ({
+        id: opp.number || opp.id,
+        title: opp.title,
+        agency: opp.agency,
+        estimatedOpenDate: opp.estimatedOpenDate,
+        estimatedCloseDate: opp.estimatedCloseDate
+      }))
     });
 
   } catch (error) {
-    console.error('Error running local grants scraper:', error);
+    console.error('Error fetching forecasts from Grants.gov:', error.response?.data || error.message);
     res.status(500).json({
-      error: 'Failed to run local grants scraper',
-      message: error.message
+      error: 'Failed to fetch forecasts from Grants.gov API',
+      message: error.response?.data?.message || error.message,
+      details: error.response?.data
+    });
+  }
+});
+
+// POST /api/fetch-hud-grants - Fetch HUD housing grants from Grants.gov API
+app.post('/api/fetch-hud-grants', async (req, res) => {
+  try {
+    const grantsGovUrl = 'https://api.grants.gov/v1/api/search2';
+
+    // Request body targeting HUD grants related to housing/homelessness/trafficking
+    const requestBody = {
+      agencies: 'HUD',                               // Department of Housing and Urban Development
+      oppStatuses: 'forecasted|posted',              // Both forecasted and posted
+      rows: 25,
+      keyword: '"domestic violence" OR "sexual assault" OR trafficking OR "transitional housing" OR homeless OR "supportive housing" OR VAWA',
+      startRecordNum: 0
+    };
+
+    console.log('🏘️  Fetching HUD grants from Grants.gov API with body:', JSON.stringify(requestBody, null, 2));
+
+    const response = await axios.post(grantsGovUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    const apiData = response.data?.data || {};
+
+    console.log('Grants.gov HUD API response:', {
+      status: response.status,
+      totalRecords: apiData.hitCount || 0,
+      oppHitsCount: apiData.oppHits?.length || 0
+    });
+
+    const rawOpportunities = apiData.oppHits || [];
+
+    // FILTER OUT TRIBAL-SPECIFIC AND IRRELEVANT GRANTS
+    const tribalKeywords = [
+      'indian', 'tribal', 'tribe', 'native american', 'alaska native',
+      'native village', 'indigenous', 'native hawaiian', 'aboriginal'
+    ];
+
+    const opportunities = rawOpportunities.filter(opp => {
+      const searchText = `${opp.title || ''} ${opp.description || ''} ${opp.synopsis || ''}`.toLowerCase();
+
+      // Check for tribal-specific content
+      const hasTribalContent = tribalKeywords.some(keyword => searchText.includes(keyword));
+
+      if (hasTribalContent) {
+        console.log(`🚫 Filtered out tribal-specific HUD grant: ${opp.title}`);
+        return false;
+      }
+
+      return true;
+    });
+
+    let insertedCount = 0;
+
+    console.log(`Processing ${opportunities.length} relevant HUD opportunities (filtered from ${rawOpportunities.length})...`);
+
+    for (const opp of opportunities) {
+      try {
+        const oppId = opp.number || opp.id || Date.now();
+        const id = `hud-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const source = 'Grants.gov HUD';
+        const title = opp.title || opp.opportunityTitle || 'Untitled HUD Grant';
+        const source_record_url = opp.number
+          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+          : `https://www.grants.gov/`;
+
+        if (!source || source === '') {
+          throw new Error('Source field cannot be empty');
+        }
+        if (!title || title === '') {
+          throw new Error('Title field cannot be empty');
+        }
+
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO opportunities (
+            id, source, source_record_url, title, summary, agency,
+            posted_date, response_deadline, raw_data, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run([
+          id,
+          source,
+          source_record_url,
+          title,
+          opp.description || opp.synopsis || '',
+          opp.agency || opp.agencyCode || 'HUD',
+          opp.openDate || opp.estimatedOpenDate || '',
+          opp.closeDate || opp.estimatedCloseDate || '',
+          JSON.stringify(opp),
+          new Date().toISOString()
+        ]);
+
+        stmt.free();
+        insertedCount++;
+        console.log(`✅ Inserted HUD grant: ${title}`);
+      } catch (err) {
+        console.error('❌ Error inserting HUD opportunity:', err.message);
+        console.error('   Opportunity data:', JSON.stringify(opp, null, 2));
+      }
+    }
+
+    saveDatabase();
+
+    res.json({
+      success: true,
+      message: `Successfully fetched and inserted ${insertedCount} HUD grant opportunities from Grants.gov`,
+      count: insertedCount,
+      totalAvailable: apiData.hitCount || 0,
+      opportunities: opportunities.map(opp => ({
+        id: opp.number || opp.id,
+        title: opp.title,
+        agency: opp.agency,
+        openDate: opp.openDate || opp.estimatedOpenDate,
+        closeDate: opp.closeDate || opp.estimatedCloseDate
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error fetching HUD grants from Grants.gov:', error.response?.data || error.message);
+    res.status(500).json({
+      error: 'Failed to fetch HUD grants from Grants.gov API',
+      message: error.response?.data?.message || error.message,
+      details: error.response?.data
+    });
+  }
+});
+
+// POST /api/fetch-samhsa-grants - Fetch SAMHSA behavioral health grants from Grants.gov API
+app.post('/api/fetch-samhsa-grants', async (req, res) => {
+  try {
+    const grantsGovUrl = 'https://api.grants.gov/v1/api/search2';
+
+    // Request body targeting SAMHSA grants related to trauma/violence/mental health
+    const requestBody = {
+      agencies: 'HHS-SAMHSA',                        // SAMHSA agency code
+      oppStatuses: 'forecasted|posted',              // Both forecasted and posted
+      rows: 25,
+      keyword: 'trauma OR violence OR "domestic violence" OR "sexual assault" OR trafficking OR "victim services" OR "mental health"',
+      startRecordNum: 0
+    };
+
+    console.log('🧠 Fetching SAMHSA grants from Grants.gov API with body:', JSON.stringify(requestBody, null, 2));
+
+    const response = await axios.post(grantsGovUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    const apiData = response.data?.data || {};
+
+    console.log('Grants.gov SAMHSA API response:', {
+      status: response.status,
+      totalRecords: apiData.hitCount || 0,
+      oppHitsCount: apiData.oppHits?.length || 0
+    });
+
+    const opportunities = apiData.oppHits || [];
+    let insertedCount = 0;
+
+    console.log(`Processing ${opportunities.length} SAMHSA opportunities...`);
+
+    for (const opp of opportunities) {
+      try {
+        const oppId = opp.number || opp.id || Date.now();
+        const id = `samhsa-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const source = 'Grants.gov SAMHSA';
+        const title = opp.title || opp.opportunityTitle || 'Untitled SAMHSA Grant';
+        const source_record_url = opp.number
+          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+          : `https://www.grants.gov/`;
+
+        if (!source || source === '') {
+          throw new Error('Source field cannot be empty');
+        }
+        if (!title || title === '') {
+          throw new Error('Title field cannot be empty');
+        }
+
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO opportunities (
+            id, source, source_record_url, title, summary, agency,
+            posted_date, response_deadline, raw_data, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run([
+          id,
+          source,
+          source_record_url,
+          title,
+          opp.description || opp.synopsis || '',
+          opp.agency || opp.agencyCode || 'SAMHSA',
+          opp.openDate || opp.estimatedOpenDate || '',
+          opp.closeDate || opp.estimatedCloseDate || '',
+          JSON.stringify(opp),
+          new Date().toISOString()
+        ]);
+
+        stmt.free();
+        insertedCount++;
+        console.log(`✅ Inserted SAMHSA grant: ${title}`);
+      } catch (err) {
+        console.error('❌ Error inserting SAMHSA opportunity:', err.message);
+        console.error('   Opportunity data:', JSON.stringify(opp, null, 2));
+      }
+    }
+
+    saveDatabase();
+
+    res.json({
+      success: true,
+      message: `Successfully fetched and inserted ${insertedCount} SAMHSA grant opportunities from Grants.gov`,
+      count: insertedCount,
+      totalAvailable: apiData.hitCount || 0,
+      opportunities: opportunities.map(opp => ({
+        id: opp.number || opp.id,
+        title: opp.title,
+        agency: opp.agency,
+        openDate: opp.openDate || opp.estimatedOpenDate,
+        closeDate: opp.closeDate || opp.estimatedCloseDate
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error fetching SAMHSA grants from Grants.gov:', error.response?.data || error.message);
+    res.status(500).json({
+      error: 'Failed to fetch SAMHSA grants from Grants.gov API',
+      message: error.response?.data?.message || error.message,
+      details: error.response?.data
+    });
+  }
+});
+
+// POST /api/scrape-florida-dcf - Scrape Florida DCF domestic violence grants
+app.post('/api/scrape-florida-dcf', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 20, 50));
+    const location = req.body?.location?.trim() || 'Jacksonville, FL';
+
+    console.log('🏛️  Scraping Florida DCF grants:', { limit, location });
+
+    // Call the Florida DCF scraper
+    const opportunities = await scrapeFloridaDCFGrants({ limit, location });
+
+    console.log(`   Scraped ${opportunities.length} Florida DCF grants`);
+
+    // Insert into database
+    const inserted = await insertOpportunitiesIntoDb(opportunities);
+
+    res.json({
+      success: true,
+      message: `Successfully scraped and inserted ${inserted} Florida DCF grant opportunities`,
+      count: inserted,
+      grants: opportunities.map(opp => ({
+        title: opp.title,
+        source: opp.source,
+        deadline: opp.response_deadline,
+        url: opp.source_record_url
+      }))
+    });
+
+  } catch (error) {
+    console.error('❌ Error scraping Florida DCF grants:', error);
+    res.status(500).json({
+      error: 'Failed to scrape Florida DCF grants',
+      message: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// POST /api/scrape-jax-foundation - Scrape Community Foundation for NE Florida grants
+app.post('/api/scrape-jax-foundation', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 10, 20));
+    const location = req.body?.location?.trim() || 'Jacksonville, FL';
+
+    console.log('🏦 Scraping Jacksonville Foundation grants:', { limit, location });
+
+    // Call the Jacksonville Foundation scraper
+    const opportunities = await scrapeJaxFoundationGrants({ limit, location });
+
+    console.log(`   Scraped ${opportunities.length} foundation grants`);
+
+    // Insert into database
+    const inserted = await insertOpportunitiesIntoDb(opportunities);
+
+    res.json({
+      success: true,
+      message: `Successfully scraped and inserted ${inserted} foundation grant opportunities`,
+      count: inserted,
+      grants: opportunities.map(opp => ({
+        title: opp.title,
+        source: opp.source,
+        deadline: opp.response_deadline,
+        url: opp.source_record_url
+      }))
+    });
+
+  } catch (error) {
+    console.error('❌ Error scraping Jacksonville Foundation grants:', error);
+    res.status(500).json({
+      error: 'Failed to scrape Jacksonville Foundation grants',
+      message: error.message,
+      stack: error.stack
+    });
+  }
+});
+
+// POST /api/scrape-local-grants - Web scrape local Jacksonville/NE Florida grants
+app.post('/api/scrape-local-grants', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 2, 5));
+    const location = req.body?.location?.trim() || 'Jacksonville, FL';
+
+    console.log('🔍 Scraping local grants:', { limit, location });
+
+    const csvIndex = readCsvIndex(csvPath);
+    const dbIndex = getDbIndex();
+    const dedupeSets = {
+      urlSet: new Set([...csvIndex.urlSet, ...dbIndex.urlSet]),
+      keySet: new Set([...csvIndex.keySet, ...dbIndex.keySet]),
+    };
+
+    const candidates = await collectLocalOpportunities({ location, dedupeSets, limit });
+    console.log(`   Found ${candidates.length} candidates`);
+
+    const selected = selectTopOpportunities(candidates, limit);
+    console.log(`   Selected ${selected.length} top opportunities`);
+
+    let saved = [];
+    if (selected.length) {
+      console.log('   Before hydration - sample record:', JSON.stringify(selected[0], null, 2));
+      saved = selected.map(hydrateRecord);
+      console.log('   After hydration - sample record:', JSON.stringify(saved[0], null, 2));
+
+      // Validate all records have required fields
+      for (let i = 0; i < saved.length; i++) {
+        const record = saved[i];
+        if (!record.source || record.source === '') {
+          console.error(`❌ Record ${i} missing source field!`, JSON.stringify(record, null, 2));
+          throw new Error(`Record ${i} is missing required 'source' field: ${record.title}`);
+        }
+        if (!record.title || record.title === '') {
+          console.error(`❌ Record ${i} missing title field!`, JSON.stringify(record, null, 2));
+          throw new Error(`Record ${i} is missing required 'title' field`);
+        }
+      }
+
+      console.log('   ✅ All records validated - proceeding with save');
+      appendCsvRows(csvPath, saved);
+      insertOpportunitiesIntoDb(saved);
+      saveDatabase();
+      console.log(`   ✅ Successfully saved ${saved.length} opportunities`);
+    }
+
+    res.json({
+      success: true,
+      count: saved.length,
+      message: saved.length
+        ? `Found ${saved.length} local opportunities`
+        : 'No new local opportunities found',
+      grants: saved.map((grant) => ({
+        title: grant.title,
+        url: grant.source_record_url,
+        source: grant.source,
+        deadline: grant.response_deadline,
+        relevanceScore: grant.relevance_score,
+      })),
+      opportunities: saved,
+    });
+  } catch (error) {
+    console.error('❌ Error scraping local grants:', error);
+    console.error('   Stack trace:', error.stack);
+    res.status(500).json({
+      error: 'Failed to scrape local grants',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    });
+  }
+});
+
+// POST /api/scrape-ovw - Scrape DOJ Office on Violence Against Women grants
+app.post('/api/scrape-ovw', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 20, 50));
+    const location = req.body?.location?.trim() || 'Jacksonville, FL';
+
+    console.log('🔍 Scraping OVW grants:', { limit, location });
+
+    // Call the OVW scraper
+    const opportunities = await scrapeOVWGrants({ limit, location });
+    console.log(`   Found ${opportunities.length} OVW opportunities`);
+
+    // Deduplicate and save to database
+    const csvIndex = readCsvIndex(csvPath);
+    const dbIndex = getDbIndex();
+    const dedupeSets = {
+      urlSet: new Set([...csvIndex.urlSet, ...dbIndex.urlSet]),
+      keySet: new Set([...csvIndex.keySet, ...dbIndex.keySet]),
+    };
+
+    // Filter out duplicates
+    const newOpportunities = opportunities.filter(opp =>
+      !shouldSkipOpportunity(opp, dedupeSets)
+    );
+    console.log(`   After deduplication: ${newOpportunities.length} new opportunities`);
+
+    let saved = [];
+    if (newOpportunities.length) {
+      // Hydrate records
+      saved = newOpportunities.map(hydrateRecord);
+
+      // Validate all records
+      for (let i = 0; i < saved.length; i++) {
+        const record = saved[i];
+        if (!record.source || record.source === '') {
+          console.error(`❌ Record ${i} missing source field!`, JSON.stringify(record, null, 2));
+          throw new Error(`Record ${i} is missing required 'source' field: ${record.title}`);
+        }
+        if (!record.title || record.title === '') {
+          console.error(`❌ Record ${i} missing title field!`, JSON.stringify(record, null, 2));
+          throw new Error(`Record ${i} is missing required 'title' field`);
+        }
+      }
+
+      // Save to database
+      console.log('   ✅ All records validated - proceeding with save');
+      appendCsvRows(csvPath, saved);
+      insertOpportunitiesIntoDb(saved);
+      saveDatabase();
+      console.log(`   ✅ Successfully saved ${saved.length} OVW opportunities`);
+    }
+
+    res.json({
+      success: true,
+      count: saved.length,
+      message: saved.length
+        ? `Found ${saved.length} new OVW grant opportunities`
+        : 'No new OVW opportunities found (may be duplicates or filtered)',
+      grants: saved.map(grant => ({
+        title: grant.title,
+        url: grant.source_record_url,
+        source: grant.source,
+        deadline: grant.response_deadline,
+        amount: grant.award_amount,
+        relevanceScore: grant.relevance_score,
+      })),
+      opportunities: saved,
+    });
+  } catch (error) {
+    console.error('❌ Error scraping OVW grants:', error);
+    console.error('   Stack trace:', error.stack);
+    res.status(500).json({
+      error: 'Failed to scrape OVW grants',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    });
+  }
+});
+
+// POST /api/scrape-acf - Scrape HHS ACF OFVPS grants
+app.post('/api/scrape-acf', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit) || 20, 50));
+    const location = req.body?.location?.trim() || 'Jacksonville, FL';
+
+    console.log('🔍 Scraping ACF grants:', { limit, location });
+
+    // Call the ACF scraper
+    const opportunities = await scrapeACFGrants({ limit, location });
+    console.log(`   Found ${opportunities.length} ACF opportunities`);
+
+    // Deduplicate and save to database
+    const csvIndex = readCsvIndex(csvPath);
+    const dbIndex = getDbIndex();
+    const dedupeSets = {
+      urlSet: new Set([...csvIndex.urlSet, ...dbIndex.urlSet]),
+      keySet: new Set([...csvIndex.keySet, ...dbIndex.keySet]),
+    };
+
+    // Filter out duplicates
+    const newOpportunities = opportunities.filter(opp =>
+      !shouldSkipOpportunity(opp, dedupeSets)
+    );
+    console.log(`   After deduplication: ${newOpportunities.length} new opportunities`);
+
+    let saved = [];
+    if (newOpportunities.length) {
+      // Hydrate records
+      saved = newOpportunities.map(hydrateRecord);
+
+      // Validate all records
+      for (let i = 0; i < saved.length; i++) {
+        const record = saved[i];
+        if (!record.source || record.source === '') {
+          console.error(`❌ Record ${i} missing source field!`, JSON.stringify(record, null, 2));
+          throw new Error(`Record ${i} is missing required 'source' field: ${record.title}`);
+        }
+        if (!record.title || record.title === '') {
+          console.error(`❌ Record ${i} missing title field!`, JSON.stringify(record, null, 2));
+          throw new Error(`Record ${i} is missing required 'title' field`);
+        }
+      }
+
+      // Save to database
+      console.log('   ✅ All records validated - proceeding with save');
+      appendCsvRows(csvPath, saved);
+      insertOpportunitiesIntoDb(saved);
+      saveDatabase();
+      console.log(`   ✅ Successfully saved ${saved.length} ACF opportunities`);
+    }
+
+    res.json({
+      success: true,
+      count: saved.length,
+      message: saved.length
+        ? `Found ${saved.length} new ACF grant opportunities`
+        : 'No new ACF opportunities found (may be duplicates or filtered)',
+      grants: saved.map(grant => ({
+        title: grant.title,
+        url: grant.source_record_url,
+        source: grant.source,
+        deadline: grant.response_deadline,
+        amount: grant.award_amount,
+        relevanceScore: grant.relevance_score,
+      })),
+      opportunities: saved,
+    });
+  } catch (error) {
+    console.error('❌ Error scraping ACF grants:', error);
+    console.error('   Stack trace:', error.stack);
+    res.status(500).json({
+      error: 'Failed to scrape ACF grants',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
     });
   }
 });

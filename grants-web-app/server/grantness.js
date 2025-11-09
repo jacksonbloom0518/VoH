@@ -33,6 +33,37 @@ const TOPIC_KEYWORDS = [
 
 const BLOCKLIST_SEGMENTS = ['news', 'press', 'blog', 'story', 'media', 'opinion', 'insights'];
 
+const TRIBAL_BLOCKLIST = [
+  'tribal',
+  'native american',
+  'alaska native',
+  'indigenous',
+  'indian tribe',
+  'federally recognized tribe',
+  'tribal government',
+  'tribal nation',
+];
+
+const GENERIC_TITLE_EXACT_MATCHES = [
+  'how to apply',
+  'apply for funding',
+  'grant programs',
+  'funding opportunities',
+  'funding opportunity',
+  'apply for grants',
+  'grant funding',
+];
+
+const GENERIC_URL_PATTERNS = [
+  '/how-to-apply',
+  '/how-to',
+  '/funding-opportunities',
+  '/grant-programs',
+  '/apply',
+  '/grants/apply',
+  '/opportunities',
+];
+
 const ALLOWED_DOMAIN_SUFFIXES = ['.gov', '.mil', '.us'];
 const TRUSTED_HOSTS = new Set([
   'coj.net',
@@ -45,7 +76,7 @@ const TRUSTED_HOSTS = new Set([
   'hhs.gov',
 ]);
 
-const MIN_FEATURE_MATCHES = 2;
+const MIN_FEATURE_MATCHES = 3;
 
 export function normalizeText(value = '') {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -56,6 +87,11 @@ export function normalizeKey(title = '', agency = '', deadline = '') {
 }
 
 export function hasBlocklistedSignal(url = '', title = '', summary = '') {
+  // Whitelist OVW media URLs (official NOFO PDFs, not news/press)
+  if (url && url.includes('justice.gov/ovw/media/')) {
+    return false;
+  }
+
   const haystack = `${url} ${title} ${summary}`.toLowerCase();
   return BLOCKLIST_SEGMENTS.some((segment) => haystack.includes(segment));
 }
@@ -162,6 +198,89 @@ export function createStableId(url) {
   return crypto.createHash('sha1').update(url).digest('hex').slice(0, 12);
 }
 
+export function isExpiredDeadline(deadline) {
+  if (!deadline) return false;
+  try {
+    const deadlineDate = new Date(deadline);
+    const now = new Date();
+    // Set time to start of day for fair comparison
+    now.setHours(0, 0, 0, 0);
+    deadlineDate.setHours(0, 0, 0, 0);
+    return deadlineDate < now;
+  } catch {
+    return false;
+  }
+}
+
+export function hasTribalSpecificContent(title = '', summary = '', text = '', url = '') {
+  // Whitelist OVW NOFO list pages that contain mixed tribal/non-tribal content
+  if (url && url.includes('justice.gov/ovw/open-notices-of-funding-opportunity')) {
+    return false; // Don't reject OVW NOFO list page
+  }
+
+  const haystack = `${title} ${summary} ${text}`.toLowerCase();
+  return TRIBAL_BLOCKLIST.some((term) => haystack.includes(term));
+}
+
+export function isGenericLandingPage(title = '', url = '', text = '') {
+  const titleLower = title.toLowerCase().trim();
+
+  // Check for exact generic title matches
+  if (GENERIC_TITLE_EXACT_MATCHES.includes(titleLower)) {
+    return true;
+  }
+
+  // Check for short generic titles (< 40 chars with only generic words)
+  if (title.length < 40) {
+    const genericWords = ['grant', 'grants', 'funding', 'apply', 'application', 'opportunity', 'opportunities', 'program', 'programs'];
+    const words = title.toLowerCase().split(/\s+/);
+    const isAllGeneric = words.every(word => genericWords.includes(word) || word.length <= 3);
+    if (isAllGeneric && words.length <= 4) {
+      return true;
+    }
+  }
+
+  // Check for generic URL patterns WITHOUT specific identifiers
+  const urlLower = url.toLowerCase();
+  const hasGenericPattern = GENERIC_URL_PATTERNS.some(pattern => urlLower.includes(pattern));
+  const hasSpecificId = /[/-](20\d{2}|FY|RFA|FOA|NOFO|PA|RFP)-/i.test(url) || /\d{6,}/.test(url);
+
+  if (hasGenericPattern && !hasSpecificId) {
+    return true;
+  }
+
+  // Check if page content is too short (< 1000 chars = likely a stub/landing page)
+  if (text.length < 1000) {
+    return true;
+  }
+
+  return false;
+}
+
+export function hasMinimumSpecificity(response_deadline, award_amount, text = '') {
+  // Must have at least ONE of:
+  // 1. Specific deadline date
+  if (response_deadline && response_deadline.trim() !== '') {
+    return true;
+  }
+
+  // 2. Specific award amount
+  if (award_amount && award_amount.trim() !== '' && !isNaN(parseFloat(award_amount))) {
+    return true;
+  }
+
+  // 3. Opportunity/solicitation number in text
+  const hasOppNumber = /\b(opportunity|solicitation|announcement|funding|notice)\s+(number|no\.?|#)\s*:?\s*[A-Z0-9-]{5,}/i.test(text);
+  const hasFOA = /\b(FOA|RFA|NOFO|PA-|RFP|BAA)-[A-Z0-9-]{3,}/i.test(text);
+  const hasFiscalYear = /\bFY\s*20\d{2}\b/i.test(text);
+
+  if (hasOppNumber || hasFOA || hasFiscalYear) {
+    return true;
+  }
+
+  return false;
+}
+
 export function analyzeGrantPage({ url, html, snippet = '', locationHint = '' }) {
   if (!url || !html) return { isGrant: false };
   const hostname = new URL(url).hostname.toLowerCase();
@@ -173,22 +292,49 @@ export function analyzeGrantPage({ url, html, snippet = '', locationHint = '' })
   const text = normalizeText($('body').text());
 
   if (!title || hasBlocklistedSignal(url, title, description)) {
+    console.log(`❌ Rejected (blocklisted): ${title || url}`);
+    return { isGrant: false };
+  }
+
+  // Filter 1: Block tribal-specific grants
+  if (hasTribalSpecificContent(title, description, text, url)) {
+    console.log(`❌ Rejected (tribal-specific): ${title}`);
+    return { isGrant: false };
+  }
+
+  // Filter 2: Block generic landing pages
+  if (isGenericLandingPage(title, url, text)) {
+    console.log(`❌ Rejected (generic landing page): ${title}`);
     return { isGrant: false };
   }
 
   const topic_hits = detectTopicHits(text);
   if (topic_hits.length === 0) {
+    console.log(`❌ Rejected (no topic matches): ${title}`);
     return { isGrant: false };
   }
 
   const featureHits = getGrantFeatureHits(text);
   if (featureHits.length < MIN_FEATURE_MATCHES) {
+    console.log(`❌ Rejected (only ${featureHits.length} features, need ${MIN_FEATURE_MATCHES}): ${title}`);
     return { isGrant: false };
   }
 
   const response_deadline = parseDeadline(text);
   const award_amount = extractAwardAmount(text);
   const agency = extractAgency($, hostname, text);
+
+  // Filter 3: Block expired deadlines
+  if (response_deadline && isExpiredDeadline(response_deadline)) {
+    console.log(`❌ Rejected (expired deadline ${response_deadline}): ${title}`);
+    return { isGrant: false };
+  }
+
+  // Filter 4: Require minimum specificity
+  if (!hasMinimumSpecificity(response_deadline, award_amount, text)) {
+    console.log(`❌ Rejected (lacks specificity - no deadline, amount, or opp number): ${title}`);
+    return { isGrant: false };
+  }
   const { city, state } = splitLocation(locationHint);
   const domainTrust = computeDomainTrust(hostname);
   const relevance_score = scoreOpportunity({ topicHits: topic_hits, domainTrust, deadline: response_deadline });
@@ -243,6 +389,8 @@ export function analyzeGrantPage({ url, html, snippet = '', locationHint = '' })
     console.error('⚠️  CRITICAL: analyzeGrantPage created record with empty title!', { url, record });
     record.title = 'Untitled Opportunity'; // Emergency fallback
   }
+
+  console.log(`✅ Accepted: ${title} (deadline: ${response_deadline || 'none'}, amount: ${award_amount || 'none'})`);
 
   return {
     ...record,
