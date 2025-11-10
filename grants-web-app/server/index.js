@@ -2109,14 +2109,18 @@ app.post('/api/send-email', async (req, res) => {
     }
 
     // Build email content
-    const htmlList = rows.map(r => `
+    const htmlList = rows.map(r => {
+      const safeUrl = r.source_record_url ? String(r.source_record_url).trim() : '';
+      const encodedUrl = safeUrl ? encodeURI(safeUrl) : '';
+      return `
       <li style="margin-bottom:12px">
         <strong>${r.title || 'Untitled'}</strong><br/>
         ${r.agency ? `<em>${r.agency}</em><br/>` : ''}
         Deadline: ${r.response_deadline || r.posted_date || 'N/A'}<br/>
-        ${r.source_record_url ? `<a href="${r.source_record_url}">${r.source_record_url}</a>` : ''}
+        ${safeUrl ? `<a href="${encodedUrl}" target="_blank" rel="noopener noreferrer">View opportunity</a><br/><small style="color:#555"><a href="${encodedUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a></small>` : ''}
       </li>
-    `).join('');
+    `
+    }).join('');
 
     const html = `
       <div>

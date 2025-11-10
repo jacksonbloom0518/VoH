@@ -9,6 +9,7 @@ export default function HomePage() {
   const [location, setLocation] = useState('Jacksonville, FL')
   const [emailRecipients, setEmailRecipients] = useState([])
   const [emailInput, setEmailInput] = useState('')
+  const [lastSentRecipients, setLastSentRecipients] = useState([])
 
   const { data: stats, isLoading, refetch } = useQuery({
     queryKey: ['stats'],
@@ -51,6 +52,10 @@ export default function HomePage() {
   const sendEmailMutation = useMutation({
     mutationFn: ({ recipients }) => {
       return opportunitiesAPI.sendEmail({ recipients, limit: 10 });
+    },
+    onMutate: (variables) => {
+      // capture recipients so we can show who the email was sent to even after clearing the input
+      setLastSentRecipients(variables?.recipients || [])
     },
     onSuccess: (data) => {
       console.log('Email sent:', data);
@@ -363,7 +368,7 @@ export default function HomePage() {
 
         {sendEmailMutation.isSuccess && (
           <div className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-700">
-            Email sent: {sendEmailMutation.data?.message || 'Success'}
+            Email sent to: {lastSentRecipients && lastSentRecipients.length > 0 ? lastSentRecipients.join(', ') : (sendEmailMutation.data?.message || 'Success')}
           </div>
         )}
 
