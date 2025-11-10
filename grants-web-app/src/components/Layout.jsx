@@ -17,7 +17,7 @@ export default function Layout() {
         <div className="container mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center space-x-3">
-              <img src={logo} alt="Villages of Hope" className="h-7 w-7 object-contain" />
+              <img src={logo} alt="Villages of Hope" className="h-28 w-auto object-contain mr-4" />
               <div>
                 <h1 className="text-xl font-semibold text-foreground tracking-tight">
                   Grant Opportunities
