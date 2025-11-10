@@ -87,6 +87,11 @@ export const opportunitiesAPI = {
     const response = await api.post('/fetch-sam', params)
     return response.data
   },
+  
+  sendEmail: async ({ recipients = [], limit = 10 } = {}) => {
+    const response = await api.post('/send-email', { recipients, limit })
+    return response.data
+  },
 }
 
 export default api

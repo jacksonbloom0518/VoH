@@ -4,26 +4,26 @@
 
 @layer base {
   :root {
-    /* Apple-inspired color palette */
+    /* Apple-inspired color palette with purple theme */
     --background: 0 0% 99%;
     --foreground: 0 0% 13%;
     --card: 0 0% 100%;
     --card-foreground: 0 0% 13%;
     --popover: 0 0% 100%;
     --popover-foreground: 0 0% 13%;
-    --primary: 211 100% 50%;
+    --primary: 268 36% 52%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 96%;
+    --secondary: 268 36% 72%;
     --secondary-foreground: 0 0% 13%;
     --muted: 0 0% 96%;
     --muted-foreground: 0 0% 45%;
-    --accent: 0 0% 96%;
-    --accent-foreground: 0 0% 13%;
+    --accent: 268 36% 62%;
+    --accent-foreground: 0 0% 100%;
     --destructive: 0 92% 58%;
     --destructive-foreground: 0 0% 100%;
     --border: 0 0% 90%;
     --input: 0 0% 90%;
-    --ring: 211 100% 50%;
+    --ring: 268 36% 52%;
     --radius: 0.75rem;
   }
 
@@ -34,19 +34,19 @@
     --card-foreground: 0 0% 98%;
     --popover: 0 0% 10%;
     --popover-foreground: 0 0% 98%;
-    --primary: 211 100% 50%;
+    --primary: 268 36% 52%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 15%;
+    --secondary: 268 36% 62%;
     --secondary-foreground: 0 0% 98%;
     --muted: 0 0% 15%;
     --muted-foreground: 0 0% 60%;
-    --accent: 0 0% 15%;
+    --accent: 268 36% 62%;
     --accent-foreground: 0 0% 98%;
     --destructive: 0 92% 58%;
     --destructive-foreground: 0 0% 100%;
     --border: 0 0% 20%;
     --input: 0 0% 20%;
-    --ring: 211 100% 50%;
+    --ring: 268 36% 52%;
   }
 }
 

@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { Search, TrendingUp, Database, ArrowRight, Download, CheckCircle, AlertCircle } from 'lucide-react'
+import { Search, TrendingUp, Database, ArrowRight, Download, CheckCircle, AlertCircle, X } from 'lucide-react'
 import { opportunitiesAPI } from '../lib/api'
 import { formatCurrency } from '../lib/utils'
 
 export default function HomePage() {
   const [location, setLocation] = useState('Jacksonville, FL')
+  const [emailRecipients, setEmailRecipients] = useState([])
+  const [emailInput, setEmailInput] = useState('')
+
   const { data: stats, isLoading, refetch } = useQuery({
     queryKey: ['stats'],
     queryFn: opportunitiesAPI.getStats,
@@ -22,6 +25,41 @@ export default function HomePage() {
     onError: (error) => {
       console.error('Error fetching grants:', error)
     },
+  })
+
+  const addEmailRecipient = () => {
+    const trimmedEmail = emailInput.trim().toLowerCase()
+    if (trimmedEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      if (!emailRecipients.includes(trimmedEmail)) {
+        setEmailRecipients([...emailRecipients, trimmedEmail])
+      }
+      setEmailInput('')
+    }
+  }
+
+  const removeEmailRecipient = (email) => {
+    setEmailRecipients(emailRecipients.filter(e => e !== email))
+  }
+
+  const handleEmailInputKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      addEmailRecipient()
+    }
+  }
+
+  const sendEmailMutation = useMutation({
+    mutationFn: ({ recipients }) => {
+      return opportunitiesAPI.sendEmail({ recipients, limit: 10 });
+    },
+    onSuccess: (data) => {
+      console.log('Email sent:', data);
+      setEmailRecipients([])
+      setEmailInput('')
+    },
+    onError: (error) => {
+      console.error('Error sending email:', error);
+    }
   })
 
   const scrapeLocalMutation = useMutation({
@@ -248,6 +286,90 @@ export default function HomePage() {
                  'Failed to fetch opportunities. Please try again.'}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Email results section */}
+        <div className="mt-8 p-6 bg-purple-50 dark:bg-purple-950/20 rounded-2xl border border-purple-200 dark:border-purple-800 space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Email Recipients
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={handleEmailInputKeyDown}
+                className="flex-1 px-4 py-2 bg-background border border-border rounded-xl focus:ring-2 focus:ring-secondary focus:border-secondary transition-all"
+                placeholder="Enter email address"
+              />
+              <button
+                onClick={addEmailRecipient}
+                disabled={!emailInput.trim()}
+                className="px-4 py-2 bg-secondary text-secondary-foreground rounded-xl font-semibold hover:bg-secondary/90 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          {/* Email Recipients List */}
+          {emailRecipients.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                {emailRecipients.length} recipient{emailRecipients.length !== 1 ? 's' : ''} added
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {emailRecipients.map((email) => (
+                  <div
+                    key={email}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-secondary/20 border border-secondary/30 rounded-lg"
+                  >
+                    <span className="text-sm text-foreground">{email}</span>
+                    <button
+                      onClick={() => removeEmailRecipient(email)}
+                      className="inline-flex items-center justify-center h-5 w-5 hover:bg-secondary/40 rounded transition-colors"
+                      aria-label={`Remove ${email}`}
+                    >
+                      <X className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Send Email Button */}
+          {emailRecipients.length > 0 && (
+            <div className="pt-2">
+              <button
+                onClick={() => sendEmailMutation.mutate({ recipients: emailRecipients })}
+                disabled={sendEmailMutation.isPending}
+                className="w-full inline-flex items-center justify-center px-6 py-3 bg-emerald-600 text-white rounded-xl font-semibold hover:bg-emerald-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {sendEmailMutation.isPending ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                    Sending...
+                  </>
+                ) : (
+                  <>Send Email to {emailRecipients.length} Recipient{emailRecipients.length !== 1 ? 's' : ''}</>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {sendEmailMutation.isSuccess && (
+          <div className="mt-4 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-green-700">
+            Email sent: {sendEmailMutation.data?.message || 'Success'}
+          </div>
+        )}
+
+        {sendEmailMutation.isError && (
+          <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-700">
+            Error sending email: {sendEmailMutation.error?.response?.data?.error || sendEmailMutation.error?.message}
           </div>
         )}
       </section>

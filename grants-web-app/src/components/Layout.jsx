@@ -1,5 +1,6 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { Search, Home, Database } from 'lucide-react'
+import { Search, Home } from 'lucide-react'
+import logo from '../assets/VOH-words-copy.webp'
 
 export default function Layout() {
   const location = useLocation()
@@ -16,13 +17,13 @@ export default function Layout() {
         <div className="container mx-auto px-6 py-5">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center space-x-3">
-              <Database className="h-7 w-7 text-primary" />
+              <img src={logo} alt="Villages of Hope" className="h-7 w-7 object-contain" />
               <div>
                 <h1 className="text-xl font-semibold text-foreground tracking-tight">
                   Grant Opportunities
                 </h1>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Supporting Women Survivors
+                  Villages of Hope
                 </p>
               </div>
             </Link>
