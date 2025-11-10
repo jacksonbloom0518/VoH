@@ -13,6 +13,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
     "@tanstack/react-query": "^5.17.0",
     "axios": "^1.6.5",
     "cheerio": "^1.0.0-rc.12",
@@ -25,6 +26,7 @@
     "express": "^4.18.2",
     "lucide-react": "^0.303.0",
     "node-fetch": "^3.3.2",
+    "pdf-parse": "^2.4.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",

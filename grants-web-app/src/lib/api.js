@@ -77,6 +77,16 @@ export const opportunitiesAPI = {
     const response = await api.post('/scrape-jax-foundation', { limit, location })
     return response.data
   },
+
+  fetchUSASpending: async (params = {}) => {
+    const response = await api.post('/fetch-usaspending', params)
+    return response.data
+  },
+
+  fetchSAM: async (params = {}) => {
+    const response = await api.post('/fetch-sam', params)
+    return response.data
+  },
 }
 
 export default api

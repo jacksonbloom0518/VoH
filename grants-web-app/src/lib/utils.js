@@ -42,6 +42,13 @@ export function getDaysUntil(dateString) {
   }
 }
 
+export function getDeadlineUrgency(daysUntil) {
+  if (daysUntil === null || daysUntil < 0) return 'expired'
+  if (daysUntil <= 7) return 'critical'  // 7 days or less
+  if (daysUntil <= 30) return 'urgent'   // 30 days or less
+  return 'normal'
+}
+
 export function getSourceBadgeColor(source) {
   const colors = {
     grants: 'bg-blue-100 text-blue-800',

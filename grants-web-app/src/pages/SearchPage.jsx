@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Search, Filter, Calendar, DollarSign, MapPin, Building2, ExternalLink, Clock } from 'lucide-react'
+import { Search, Filter, Calendar, DollarSign, MapPin, Building2, ExternalLink, Clock, AlertTriangle } from 'lucide-react'
 import { opportunitiesAPI } from '../lib/api'
-import { formatCurrency, formatDate, getDaysUntil, getSourceBadgeColor, cn } from '../lib/utils'
+import { formatCurrency, formatDate, getDaysUntil, getDeadlineUrgency, getSourceBadgeColor, cn } from '../lib/utils'
 
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -184,7 +184,7 @@ export default function SearchPage() {
             <div className="space-y-4">
               {data.data.map((opp) => {
                 const daysUntil = getDaysUntil(opp.response_deadline)
-                const isUrgent = daysUntil !== null && daysUntil < 30
+                const urgency = getDeadlineUrgency(daysUntil)
 
                 return (
                   <Link
@@ -231,11 +231,45 @@ export default function SearchPage() {
                           )}
 
                           {opp.response_deadline && (
-                            <div className={cn('flex items-center gap-2', isUrgent ? 'text-destructive font-semibold' : 'text-muted-foreground')}>
-                              <Clock className="h-4 w-4" />
-                              <span>
-                                {daysUntil !== null && daysUntil >= 0 ? `${daysUntil}d left` : formatDate(opp.response_deadline)}
-                              </span>
+                            <div className="flex items-center gap-2">
+                              {urgency === 'critical' && (
+                                <>
+                                  <AlertTriangle className="h-4 w-4 text-red-600" />
+                                  <span className="text-red-600 font-bold">
+                                    {daysUntil}d left
+                                  </span>
+                                  <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-semibold">
+                                    URGENT
+                                  </span>
+                                </>
+                              )}
+                              {urgency === 'urgent' && (
+                                <>
+                                  <Clock className="h-4 w-4 text-orange-600" />
+                                  <span className="text-orange-600 font-semibold">
+                                    {daysUntil}d left
+                                  </span>
+                                  <span className="ml-2 px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-xs font-semibold">
+                                    CLOSING SOON
+                                  </span>
+                                </>
+                              )}
+                              {urgency === 'normal' && (
+                                <>
+                                  <Clock className="h-4 w-4" />
+                                  <span className="text-muted-foreground">
+                                    {daysUntil}d left
+                                  </span>
+                                </>
+                              )}
+                              {urgency === 'expired' && (
+                                <>
+                                  <Clock className="h-4 w-4 text-gray-400" />
+                                  <span className="text-gray-400">
+                                    {formatDate(opp.response_deadline)}
+                                  </span>
+                                </>
+                              )}
                             </div>
                           )}
                         </div>

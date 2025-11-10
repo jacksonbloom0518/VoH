@@ -21,6 +21,7 @@ import { scrapeOVWGrants } from '../scraper/ovw-scraper.js';
 import { scrapeACFGrants } from '../scraper/acf-scraper.js';
 import { scrapeFloridaDCFGrants } from '../scraper/florida-dcf-scraper.js';
 import { scrapeJaxFoundationGrants } from '../scraper/jax-foundation-scraper.js';
+import { batchProcessRequirements } from './requirements-generator.js';
 
 dotenv.config();
 
@@ -106,7 +107,8 @@ function initSchema() {
       relevance_score REAL,
       topic_hits TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      raw_data TEXT
+      raw_data TEXT,
+      requirements TEXT
     )
   `);
 
@@ -116,6 +118,14 @@ function initSchema() {
   db.run(`CREATE INDEX IF NOT EXISTS idx_posted_date ON opportunities(posted_date)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_deadline ON opportunities(response_deadline)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_relevance ON opportunities(relevance_score)`);
+
+  // Add requirements column if it doesn't exist (migration for existing databases)
+  try {
+    db.run(`ALTER TABLE opportunities ADD COLUMN requirements TEXT`);
+    console.log('✅ Added requirements column to existing database');
+  } catch (err) {
+    // Column already exists - this is fine
+  }
 
   console.log('✅ Database schema initialized');
   saveDatabase();
@@ -195,6 +205,52 @@ function insertOpportunitiesIntoDb(records = []) {
   }
 
   stmt.free();
+}
+
+/**
+ * Automatically process requirements for grants that don't have them yet
+ * Runs in the background without blocking the response
+ * @param {number} maxGrants - Maximum number of grants to process (default: 5)
+ */
+async function processNewGrantRequirements(maxGrants = 5) {
+  try {
+    // Only process if Anthropic API key is configured
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey || apiKey.trim() === '') {
+      console.log('   ⏭️  Skipping requirements generation (no API key configured)');
+      return;
+    }
+
+    // Find grants without requirements
+    const stmt = db.prepare('SELECT id FROM opportunities WHERE requirements IS NULL LIMIT ?');
+    stmt.bind([maxGrants]);
+
+    const grantsToProcess = [];
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      grantsToProcess.push(row.id);
+    }
+    stmt.free();
+
+    if (grantsToProcess.length === 0) {
+      console.log('   ✅ All grants have requirements');
+      return;
+    }
+
+    console.log(`\n🤖 Starting background requirements processing for ${grantsToProcess.length} grants...`);
+
+    // Process in background (don't await)
+    batchProcessRequirements(db, grantsToProcess, saveDatabase)
+      .then((processed) => {
+        console.log(`\n✅ Background processing complete: ${processed} grants processed`);
+      })
+      .catch((error) => {
+        console.error(`\n❌ Background processing error: ${error.message}`);
+      });
+
+  } catch (error) {
+    console.error('Error starting requirements processing:', error.message);
+  }
 }
 
 function hydrateRecord(record) {
@@ -661,10 +717,10 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
     // Request body based on user requirements
     // Use pipe-delimited strings for multiple values
     const requestBody = {
-      fundingCategories: 'ISS|HL|ED|LJL|HU',   // All relevant funding categories
+      fundingCategories: 'ISS|LJL',             // Income Security & Social Services, Law Justice & Legal Services (removed HL/ED to avoid irrelevant health/education grants)
       oppStatuses: 'forecasted|posted',         // Opportunity statuses: forecasted (future) OR posted
-      rows: 10,                                 // Fetch 10 opportunities
-      keyword: 'trafficking OR "Office on Violence Against Women"',  // Any trafficking-related OR Office on Violence Against Women
+      rows: 50,                                 // Fetch more to filter down
+      keyword: '"human trafficking" OR "sex trafficking" OR "domestic violence" OR "sexual assault" OR "Office on Violence Against Women" OR VAWA OR FVPSA OR "dating violence" OR stalking',  // Specific DV/trafficking keywords
       startRecordNum: 0                         // Start from first record
       // Note: Not using date filter to allow forecasted opportunities (which are future-focused)
       // The 'posted' status will naturally include recent opportunities
@@ -690,12 +746,31 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
       oppHitsCount: apiData.oppHits?.length || 0
     });
 
-    // Transform and insert the data into the database
-    // The search2 API returns data in 'data.oppHits' array
-    const opportunities = apiData.oppHits || [];
+    // FILTER OUT IRRELEVANT TOPICS
+    const irrelevantKeywords = [
+      'hiv', 'aids', 'pepfar', 'botswana', 'ukraine', 'sierra leone', 'namibia', 'democratic republic',
+      'alzheimer', 'dementia', 'respite', 'homelessness', 'homeless', 'youth homelessness',
+      'language access', 'language services', 'translation', 'educationusa',
+      'substance abuse', 'opioid', 'drug', 'superfund', 'environmental',
+      'tuberculosis', 'tb services', 'malaria', 'global health',
+      'central america', 'kinshasa', 'haut katanga', 'wildlife trafficking', 'narcotics'
+    ];
+
+    const rawOpportunities = apiData.oppHits || [];
+    const opportunities = rawOpportunities.filter(opp => {
+      const searchText = `${opp.title || ''} ${opp.description || ''} ${opp.synopsis || ''} ${opp.agency || ''}`.toLowerCase();
+      const hasIrrelevantContent = irrelevantKeywords.some(keyword => searchText.includes(keyword));
+
+      if (hasIrrelevantContent) {
+        console.log(`🚫 Filtered out irrelevant grant: ${opp.title}`);
+        return false;
+      }
+      return true;
+    });
+
     let insertedCount = 0;
 
-    console.log(`Processing ${opportunities.length} opportunities...`);
+    console.log(`Processing ${opportunities.length} relevant opportunities (filtered from ${rawOpportunities.length} total)...`);
 
     for (const opp of opportunities) {
       try {
@@ -722,8 +797,8 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
         const stmt = db.prepare(`
           INSERT OR REPLACE INTO opportunities (
             id, source, source_record_url, title, summary, agency,
-            posted_date, response_deadline, raw_data, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            posted_date, response_deadline, raw_data, created_at, requirements
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         stmt.run([
@@ -736,7 +811,8 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
           opp.openDate || new Date().toISOString(),
           opp.closeDate || '',
           JSON.stringify(opp),
-          new Date().toISOString()
+          new Date().toISOString(),
+          null
         ]);
 
         stmt.free();
@@ -750,6 +826,11 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
 
     // Save the database after insertions
     saveDatabase();
+
+    // Automatically process requirements for new grants (background)
+    if (insertedCount > 0) {
+      processNewGrantRequirements(Math.min(insertedCount, 5));
+    }
 
     res.json({
       success: true,
@@ -859,8 +940,8 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
         const stmt = db.prepare(`
           INSERT OR REPLACE INTO opportunities (
             id, source, source_record_url, title, summary, agency,
-            posted_date, response_deadline, raw_data, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            posted_date, response_deadline, raw_data, created_at, requirements
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         stmt.run([
@@ -873,7 +954,8 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
           opp.estimatedOpenDate || opp.openDate || '',  // Forecasts have estimated open date
           opp.estimatedCloseDate || opp.closeDate || '',  // Forecasts have estimated close date
           JSON.stringify(opp),
-          new Date().toISOString()
+          new Date().toISOString(),
+          null
         ]);
 
         stmt.free();
@@ -887,6 +969,11 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
 
     // Save the database after insertions
     saveDatabase();
+
+    // Automatically process requirements for new grants (background)
+    if (insertedCount > 0) {
+      processNewGrantRequirements(Math.min(insertedCount, 5));
+    }
 
     res.json({
       success: true,
@@ -991,8 +1078,8 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
         const stmt = db.prepare(`
           INSERT OR REPLACE INTO opportunities (
             id, source, source_record_url, title, summary, agency,
-            posted_date, response_deadline, raw_data, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            posted_date, response_deadline, raw_data, created_at, requirements
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         stmt.run([
@@ -1005,7 +1092,8 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
           opp.openDate || opp.estimatedOpenDate || '',
           opp.closeDate || opp.estimatedCloseDate || '',
           JSON.stringify(opp),
-          new Date().toISOString()
+          new Date().toISOString(),
+          null
         ]);
 
         stmt.free();
@@ -1018,6 +1106,11 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
     }
 
     saveDatabase();
+
+    // Automatically process requirements for new grants (background)
+    if (insertedCount > 0) {
+      processNewGrantRequirements(Math.min(insertedCount, 5));
+    }
 
     res.json({
       success: true,
@@ -1101,8 +1194,8 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
         const stmt = db.prepare(`
           INSERT OR REPLACE INTO opportunities (
             id, source, source_record_url, title, summary, agency,
-            posted_date, response_deadline, raw_data, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            posted_date, response_deadline, raw_data, created_at, requirements
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         stmt.run([
@@ -1115,7 +1208,8 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
           opp.openDate || opp.estimatedOpenDate || '',
           opp.closeDate || opp.estimatedCloseDate || '',
           JSON.stringify(opp),
-          new Date().toISOString()
+          new Date().toISOString(),
+          null
         ]);
 
         stmt.free();
@@ -1128,6 +1222,11 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
     }
 
     saveDatabase();
+
+    // Automatically process requirements for new grants (background)
+    if (insertedCount > 0) {
+      processNewGrantRequirements(Math.min(insertedCount, 5));
+    }
 
     res.json({
       success: true,
@@ -1456,6 +1555,440 @@ app.post('/api/scrape-acf', async (req, res) => {
       error: 'Failed to scrape ACF grants',
       message: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    });
+  }
+});
+
+// POST /api/fetch-usaspending - Fetch grant awards from USASpending.gov API
+app.post('/api/fetch-usaspending', async (req, res) => {
+  try {
+    const usaspendingUrl = 'https://api.usaspending.gov/api/v2/search/spending_by_award/';
+
+    // Calculate date range: last 18 months
+    const today = new Date();
+    const eighteenMonthsAgo = new Date();
+    eighteenMonthsAgo.setMonth(today.getMonth() - 18);
+
+    // Format dates as YYYY-MM-DD for USASpending API
+    const formatDate = (date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    // Request body for grant awards - using very specific keywords
+    const requestBody = {
+      filters: {
+        award_type_codes: ['02', '03', '04', '05'],  // Grant award codes
+        time_period: [{
+          start_date: formatDate(eighteenMonthsAgo),
+          end_date: formatDate(today)
+        }],
+        keywords: [
+          'domestic violence', 'sexual assault', 'VAWA',
+          'Office on Violence Against Women', 'FVPSA',
+          'Violence Against Women Act', 'dating violence'
+        ]
+      },
+      fields: [
+        'Award ID', 'Recipient Name', 'Start Date', 'End Date',
+        'Award Amount', 'Awarding Agency', 'Awarding Sub Agency',
+        'Description', 'Place of Performance City Name',
+        'Place of Performance State Code', 'Place of Performance Zip',
+        'Place of Performance Country Name'
+      ],
+      page: 1,
+      limit: 50,  // Reduced from 100
+      order: 'desc',
+      sort: 'Award Amount'
+    };
+
+    console.log('💰 Fetching from USASpending.gov API...');
+    console.log(`   Date range: ${formatDate(eighteenMonthsAgo)} to ${formatDate(today)}`);
+
+    // Make POST request to USASpending API (no API key needed)
+    const response = await axios.post(usaspendingUrl, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    const apiData = response.data || {};
+    console.log('USASpending API response:', {
+      status: response.status,
+      totalRecords: apiData.page_metadata?.total || 0,
+      resultsCount: apiData.results?.length || 0
+    });
+
+    // FILTER OUT IRRELEVANT TOPICS - expanded list
+    const irrelevantKeywords = [
+      'hiv', 'aids', 'pepfar', 'botswana', 'ukraine', 'sierra leone', 'namibia',
+      'alzheimer', 'dementia', 'respite', 'homelessness', 'homeless', 'housing first',
+      'language access', 'translation', 'substance abuse', 'opioid', 'drug', 'addiction',
+      'environmental', 'tuberculosis', 'malaria', 'global health', 'pandemic',
+      'wildlife trafficking', 'narcotics', 'arms trafficking', 'drug trafficking',
+      'veterans', 'veteran', 'tribal', 'native american', 'indian',
+      'mental health', 'behavioral health', 'suicide', 'psychiatric',
+      'covid', 'coronavirus', 'vaccine', 'immunization',
+      'refugee', 'asylum', 'immigration', 'migrant',
+      'central america', 'guatemala', 'el salvador', 'honduras'
+    ];
+
+    const rawResults = apiData.results || [];
+    const filteredResults = rawResults.filter(award => {
+      const searchText = `${award['Recipient Name'] || ''} ${award['Description'] || ''} ${award['Awarding Agency'] || ''}`.toLowerCase();
+
+      // Check for irrelevant content
+      const hasIrrelevantContent = irrelevantKeywords.some(keyword => searchText.includes(keyword));
+      if (hasIrrelevantContent) {
+        console.log(`🚫 Filtered out irrelevant award: ${award['Recipient Name']}`);
+        return false;
+      }
+
+      // Require at least one relevant keyword
+      const relevantKeywords = ['domestic violence', 'sexual assault', 'vawa', 'fvpsa', 'dating violence', 'stalking', 'violence against women'];
+      const hasRelevantContent = relevantKeywords.some(keyword => searchText.includes(keyword));
+      if (!hasRelevantContent) {
+        console.log(`🚫 Filtered out (no DV keywords): ${award['Recipient Name']}`);
+        return false;
+      }
+
+      return true;
+    });
+
+    let insertedCount = 0;
+    console.log(`Processing ${filteredResults.length} relevant awards (filtered from ${rawResults.length} total)...`);
+
+    for (const award of filteredResults) {
+      try {
+        const awardId = award['Award ID'] || '';
+        const id = `usaspending-${awardId.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+        // DEFENSIVE: Ensure required fields
+        const source = 'USASpending';
+        const title = `${award['Recipient Name'] || 'Unknown Recipient'} - ${award['Awarding Agency'] || 'Grant'}`;
+        const source_record_url = `https://www.usaspending.gov/award/${awardId}`;
+
+        if (!source || !title) {
+          throw new Error('Missing required fields');
+        }
+
+        // Insert into database
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO opportunities (
+            id, source, source_record_url, title, summary, agency,
+            posted_date, response_deadline, pop_city, pop_state, pop_zip, pop_country,
+            award_number, award_amount, award_date, award_awardee,
+            raw_data, created_at, requirements
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run([
+          id,
+          source,
+          source_record_url,
+          title,
+          award['Description'] || '',
+          award['Awarding Agency'] || award['Awarding Sub Agency'] || '',
+          award['Start Date'] || new Date().toISOString(),
+          award['End Date'] || '',
+          award['Place of Performance City Name'] || '',
+          award['Place of Performance State Code'] || '',
+          award['Place of Performance Zip'] || '',
+          award['Place of Performance Country Name'] || 'USA',
+          awardId,
+          award['Award Amount'] || 0,
+          award['Start Date'] || '',
+          award['Recipient Name'] || '',
+          JSON.stringify(award),
+          new Date().toISOString(),
+          null
+        ]);
+
+        stmt.free();
+        insertedCount++;
+        console.log(`✅ Inserted: ${title.substring(0, 80)}...`);
+      } catch (err) {
+        console.error('❌ Error inserting award:', err.message);
+      }
+    }
+
+    saveDatabase();
+
+    res.json({
+      success: true,
+      message: `Successfully fetched and inserted ${insertedCount} awards from USASpending.gov`,
+      count: insertedCount,
+      totalAvailable: apiData.page_metadata?.total || 0,
+      awards: filteredResults.slice(0, 10).map(award => ({
+        id: award['Award ID'],
+        recipient: award['Recipient Name'],
+        agency: award['Awarding Agency'],
+        amount: award['Award Amount'],
+        startDate: award['Start Date']
+      }))
+    });
+
+  } catch (error) {
+    console.error('Error fetching from USASpending.gov:', error.response?.data || error.message);
+    res.status(500).json({
+      error: 'Failed to fetch from USASpending.gov API',
+      message: error.response?.data?.message || error.message
+    });
+  }
+});
+
+// POST /api/fetch-sam - Fetch contract opportunities from SAM.gov API
+app.post('/api/fetch-sam', async (req, res) => {
+  try {
+    const samApiKey = process.env.SAM_API_KEY;
+
+    if (!samApiKey || samApiKey.trim() === '') {
+      return res.status(400).json({
+        error: 'SAM.gov API key not configured',
+        message: 'Please add your SAM_API_KEY to the .env file. Get your API key from: https://open.gsa.gov/api/opportunities-api/'
+      });
+    }
+
+    const samUrl = 'https://api.sam.gov/opportunities/v2/search';
+
+    // Calculate date range: last 18 months
+    const today = new Date();
+    const eighteenMonthsAgo = new Date();
+    eighteenMonthsAgo.setMonth(today.getMonth() - 18);
+
+    // Format dates as MM/DD/YYYY for SAM API
+    const formatDate = (date) => {
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${month}/${day}/${year}`;
+    };
+
+    // Query parameters - PostedFrom and PostedTo are mandatory
+    const params = {
+      postedFrom: formatDate(eighteenMonthsAgo),
+      postedTo: formatDate(today),
+      limit: 100,
+      offset: 0,
+      ptype: 'g'  // 'g' = grants/assistance (not contracts)
+    };
+
+    console.log('🏛️  Fetching from SAM.gov API with params:', params);
+
+    // Make GET request to SAM API with API key in header
+    const response = await axios.get(samUrl, {
+      params,
+      headers: {
+        'X-Api-Key': samApiKey,
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000
+    });
+
+    const apiData = response.data || {};
+    console.log('SAM.gov API response:', {
+      status: response.status,
+      totalRecords: apiData.totalRecords || 0,
+      resultsCount: apiData.opportunitiesData?.length || 0
+    });
+
+    // FILTER FOR RELEVANT OPPORTUNITIES - two-stage filter
+    const irrelevantKeywords = [
+      'hiv', 'aids', 'pepfar', 'botswana', 'ukraine', 'sierra leone', 'namibia',
+      'alzheimer', 'dementia', 'respite', 'homelessness', 'homeless', 'housing first',
+      'language access', 'translation', 'substance abuse', 'opioid', 'drug', 'addiction',
+      'environmental', 'tuberculosis', 'malaria', 'global health', 'pandemic',
+      'wildlife trafficking', 'narcotics', 'arms trafficking', 'drug trafficking',
+      'veterans', 'veteran', 'tribal', 'native american', 'indian',
+      'mental health', 'behavioral health', 'suicide', 'psychiatric',
+      'covid', 'coronavirus', 'vaccine', 'immunization',
+      'refugee', 'asylum', 'immigration', 'migrant',
+      'central america', 'guatemala', 'el salvador', 'honduras',
+      'construction', 'infrastructure', 'engineering', 'architect'
+    ];
+
+    const relevantKeywords = [
+      'domestic violence', 'sexual assault', 'vawa',
+      'violence against women', 'dating violence', 'stalking',
+      'fvpsa', 'intimate partner violence', 'human trafficking victims',
+      'sex trafficking victims', 'victim services', 'survivor services'
+    ];
+
+    const rawOpportunities = apiData.opportunitiesData || [];
+
+    // Filter opportunities for relevance (date filtering handled by API params)
+    const filteredOpportunities = rawOpportunities.filter(opp => {
+      const searchText = `${opp.title || ''} ${opp.description || ''} ${opp.synopsis || ''}`.toLowerCase();
+
+      // First filter: exclude irrelevant topics
+      const hasIrrelevantContent = irrelevantKeywords.some(keyword => searchText.includes(keyword));
+      if (hasIrrelevantContent) {
+        console.log(`🚫 Filtered out irrelevant: ${opp.title}`);
+        return false;
+      }
+
+      // Second filter: require at least one relevant keyword
+      const isRelevant = relevantKeywords.some(keyword => searchText.includes(keyword.toLowerCase()));
+      if (!isRelevant) {
+        console.log(`🚫 Filtered out (no DV keywords): ${opp.title}`);
+        return false;
+      }
+
+      return true;
+    });
+
+    let insertedCount = 0;
+    console.log(`Processing ${filteredOpportunities.length} relevant opportunities (filtered from ${rawOpportunities.length} total)...`);
+
+    for (const opp of filteredOpportunities) {
+      try {
+        const solicitationNumber = opp.solicitationNumber || '';
+        const id = `sam-${solicitationNumber.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
+        // DEFENSIVE: Ensure required fields
+        const source = 'SAM.gov';
+        const title = opp.title || 'Untitled Opportunity';
+        const source_record_url = opp.uiLink || `https://sam.gov/opp/${solicitationNumber}`;
+
+        if (!source || !title) {
+          throw new Error('Missing required fields');
+        }
+
+        // Extract point of contact
+        const poc = opp.pointOfContact?.[0] || {};
+        const placeOfPerformance = opp.placeOfPerformance || {};
+
+        // Insert into database
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO opportunities (
+            id, source, source_record_url, title, summary, agency,
+            posted_date, response_deadline, naics, psc, set_aside,
+            pop_city, pop_state, pop_zip, pop_country,
+            poc_name, poc_email, poc_phone, award_number,
+            raw_data, created_at, requirements
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        stmt.run([
+          id,
+          source,
+          source_record_url,
+          title,
+          opp.description || opp.synopsis || '',
+          opp.organizationName || opp.fullParentPathName || '',
+          opp.postedDate || new Date().toISOString(),
+          opp.responseDeadLine || '',
+          opp.naicsCode || '',
+          opp.classificationCode || '',
+          opp.setAsideCode || opp.setAside || '',
+          placeOfPerformance.city || '',
+          placeOfPerformance.state || '',
+          placeOfPerformance.zip || '',
+          placeOfPerformance.country || 'USA',
+          poc.fullName || poc.name || '',
+          poc.email || '',
+          poc.phone || '',
+          solicitationNumber,
+          JSON.stringify(opp),
+          new Date().toISOString(),
+          null
+        ]);
+
+        stmt.free();
+        insertedCount++;
+        console.log(`✅ Inserted: ${title.substring(0, 80)}...`);
+      } catch (err) {
+        console.error('❌ Error inserting opportunity:', err.message);
+      }
+    }
+
+    saveDatabase();
+
+    // Automatically process requirements for new grants (background)
+    if (insertedCount > 0) {
+      processNewGrantRequirements(Math.min(insertedCount, 5));
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully fetched and inserted ${insertedCount} opportunities from SAM.gov`,
+      count: insertedCount,
+      totalAvailable: apiData.totalRecords || 0,
+      opportunities: filteredOpportunities.slice(0, 10).map(opp => ({
+        id: opp.solicitationNumber,
+        title: opp.title,
+        agency: opp.organizationName,
+        postedDate: opp.postedDate,
+        deadline: opp.responseDeadLine
+      }))
+    });
+
+  } catch (error) {
+    console.error('❌ SAM.gov API Error Details:');
+    console.error('   Status:', error.response?.status);
+    console.error('   Status Text:', error.response?.statusText);
+    console.error('   Error Data:', JSON.stringify(error.response?.data, null, 2));
+    console.error('   Error Message:', error.message);
+    console.error('   Request URL:', samUrl);
+    console.error('   Request Params:', JSON.stringify(params, null, 2));
+
+    // Handle rate limiting
+    if (error.response?.status === 429) {
+      return res.status(429).json({
+        error: 'SAM.gov API rate limit exceeded',
+        message: 'Please wait a few minutes before trying again',
+        nextAccessTime: error.response?.data?.nextAccessTime
+      });
+    }
+
+    // Handle 400 errors specifically
+    if (error.response?.status === 400) {
+      return res.status(400).json({
+        error: 'SAM.gov API Bad Request',
+        message: error.response?.data?.errorMessage || error.response?.data?.message || 'Invalid request parameters. The SAM.gov API may have changed or your API key may be invalid.',
+        details: error.response?.data
+      });
+    }
+
+    res.status(500).json({
+      error: 'Failed to fetch from SAM.gov API',
+      message: error.response?.data?.message || error.message,
+      details: error.response?.data
+    });
+  }
+});
+
+// Clear all opportunities (admin endpoint)
+app.post('/api/admin/clear-all', (req, res) => {
+  try {
+    // Count records before deleting
+    const countStmt = db.prepare('SELECT COUNT(*) as count FROM opportunities');
+    const result = countStmt.getAsObject();
+    const deletedCount = result.count || 0;
+
+    // Delete all records
+    db.run('DELETE FROM opportunities');
+
+    // Save database
+    saveDatabase();
+
+    console.log(`🗑️  Deleted ${deletedCount} opportunities from database`);
+
+    res.json({
+      success: true,
+      message: `Successfully deleted ${deletedCount} opportunities`,
+      deletedCount
+    });
+  } catch (error) {
+    console.error('Error clearing database:', error);
+    res.status(500).json({
+      error: 'Failed to clear database',
+      message: error.message
     });
   }
 });

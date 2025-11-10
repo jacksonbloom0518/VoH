@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { 
-  ArrowLeft, Building2, Calendar, DollarSign, MapPin, Mail, 
-  Phone, User, ExternalLink, Clock, Tag, FileText 
+import {
+  ArrowLeft, Building2, Calendar, DollarSign, MapPin, Mail,
+  Phone, User, ExternalLink, Clock, Tag, FileText, AlertTriangle, CheckCircle2
 } from 'lucide-react'
 import { opportunitiesAPI } from '../lib/api'
-import { formatCurrency, formatDate, getDaysUntil, getSourceBadgeColor, cn } from '../lib/utils'
+import { formatCurrency, formatDate, getDaysUntil, getDeadlineUrgency, getSourceBadgeColor, cn } from '../lib/utils'
 
 export default function DetailPage() {
   const { id } = useParams()
@@ -45,7 +45,7 @@ export default function DetailPage() {
   }
 
   const daysUntil = getDaysUntil(opp.response_deadline)
-  const isUrgent = daysUntil !== null && daysUntil < 30
+  const urgency = getDeadlineUrgency(daysUntil)
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
@@ -86,10 +86,36 @@ export default function DetailPage() {
           )}
 
           {opp.response_deadline && (
-            <div className={cn('rounded-xl p-6', isUrgent ? 'bg-destructive/10' : 'bg-accent')}>
-              <div className={cn('flex items-center gap-2 mb-2', isUrgent ? 'text-destructive' : 'text-muted-foreground')}>
-                <Clock className="h-5 w-5" />
+            <div className={cn(
+              'rounded-xl p-6',
+              urgency === 'critical' && 'bg-red-50 border-2 border-red-200',
+              urgency === 'urgent' && 'bg-orange-50 border-2 border-orange-200',
+              urgency === 'normal' && 'bg-accent',
+              urgency === 'expired' && 'bg-gray-50'
+            )}>
+              <div className={cn(
+                'flex items-center gap-2 mb-2',
+                urgency === 'critical' && 'text-red-600',
+                urgency === 'urgent' && 'text-orange-600',
+                urgency === 'normal' && 'text-muted-foreground',
+                urgency === 'expired' && 'text-gray-400'
+              )}>
+                {urgency === 'critical' ? (
+                  <AlertTriangle className="h-5 w-5" />
+                ) : (
+                  <Clock className="h-5 w-5" />
+                )}
                 <span className="text-sm font-semibold">Deadline</span>
+                {urgency === 'critical' && (
+                  <span className="ml-2 px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-bold">
+                    URGENT
+                  </span>
+                )}
+                {urgency === 'urgent' && (
+                  <span className="ml-2 px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-xs font-semibold">
+                    CLOSING SOON
+                  </span>
+                )}
               </div>
               <p className="text-3xl font-bold text-foreground">
                 {daysUntil !== null && daysUntil >= 0 ? (
@@ -127,6 +153,48 @@ export default function DetailPage() {
           <p className="text-muted-foreground whitespace-pre-wrap leading-relaxed text-base">
             {opp.summary}
           </p>
+        </div>
+      )}
+
+      {/* Requirements */}
+      {opp.requirements && (
+        <div className="bg-card rounded-2xl shadow-apple p-8">
+          <h2 className="text-2xl font-semibold text-foreground mb-6 flex items-center gap-3">
+            <CheckCircle2 className="h-6 w-6 text-primary" />
+            Application Requirements
+            <span className="ml-3 px-3 py-1 bg-primary/10 text-primary text-xs font-semibold rounded-full">
+              AI-Generated
+            </span>
+          </h2>
+          <div className="text-muted-foreground leading-relaxed text-base space-y-3">
+            {opp.requirements.split('\n').map((line, idx) => {
+              const trimmed = line.trim();
+              if (!trimmed) return null;
+
+              // Check if it's a bullet point
+              if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*')) {
+                return (
+                  <div key={idx} className="flex items-start gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
+                    <p>{trimmed.replace(/^[•\-*]\s*/, '')}</p>
+                  </div>
+                );
+              }
+
+              // Regular paragraph
+              return (
+                <p key={idx} className="text-sm opacity-80">
+                  {trimmed}
+                </p>
+              );
+            })}
+          </div>
+          <div className="mt-6 pt-6 border-t border-border">
+            <p className="text-sm text-muted-foreground/70 italic">
+              These requirements were automatically generated using AI based on available grant documentation.
+              Always verify requirements by visiting the official grant source.
+            </p>
+          </div>
         </div>
       )}
 

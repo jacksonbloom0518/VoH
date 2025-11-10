@@ -120,6 +120,30 @@ export default function HomePage() {
     },
   })
 
+  const fetchUSASpendingMutation = useMutation({
+    mutationFn: opportunitiesAPI.fetchUSASpending,
+    onSuccess: (data) => {
+      console.log('Successfully fetched USASpending data:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error fetching USASpending data:', error)
+    },
+  })
+
+  const fetchSAMMutation = useMutation({
+    mutationFn: opportunitiesAPI.fetchSAM,
+    onSuccess: (data) => {
+      console.log('Successfully fetched SAM.gov data:', data)
+      // Refetch stats to update the display
+      refetch()
+    },
+    onError: (error) => {
+      console.error('Error fetching SAM.gov data:', error)
+    },
+  })
+
   const features = [
     {
       icon: Search,
@@ -686,6 +710,142 @@ export default function HomePage() {
                 {scrapeJaxFoundationMutation.error?.response?.data?.message ||
                  scrapeJaxFoundationMutation.error?.message ||
                  'Failed to fetch foundation grants. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* USASpending.gov Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch USASpending.gov Grant Awards
+            </h3>
+            <p className="text-muted-foreground">
+              Pull historical grant award data from USASpending.gov - last 18 months of federal grants related to domestic violence, trafficking, and victim services
+            </p>
+          </div>
+          <button
+            onClick={() => fetchUSASpendingMutation.mutate()}
+            disabled={fetchUSASpendingMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-amber-600 text-white rounded-xl font-semibold hover:bg-amber-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {fetchUSASpendingMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch USASpending Awards
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {fetchUSASpendingMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {fetchUSASpendingMutation.data?.message || 'Successfully fetched USASpending award data'}
+              </div>
+              {fetchUSASpendingMutation.data?.opportunities && fetchUSASpendingMutation.data.opportunities.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {fetchUSASpendingMutation.data.opportunities.slice(0, 5).map((opp, idx) => (
+                    <li key={idx}>• {opp.title}</li>
+                  ))}
+                  {fetchUSASpendingMutation.data.opportunities.length > 5 && (
+                    <li className="font-semibold">...and {fetchUSASpendingMutation.data.opportunities.length - 5} more</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {fetchUSASpendingMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {fetchUSASpendingMutation.error?.response?.data?.message ||
+                 fetchUSASpendingMutation.error?.message ||
+                 'Failed to fetch USASpending data. Please try again.'}
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* SAM.gov Button Section */}
+      <section className="bg-card rounded-2xl shadow-apple p-8">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex-1">
+            <h3 className="text-xl font-semibold text-foreground mb-2">
+              Fetch SAM.gov Contract Opportunities
+            </h3>
+            <p className="text-muted-foreground">
+              Pull contract and assistance opportunities from SAM.gov (System for Award Management) - last 18 months of opportunities related to victim services and trafficking
+            </p>
+          </div>
+          <button
+            onClick={() => fetchSAMMutation.mutate()}
+            disabled={fetchSAMMutation.isPending}
+            className="inline-flex items-center px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition-all duration-200 shadow-apple hover:shadow-apple-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {fetchSAMMutation.isPending ? (
+              <>
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2" />
+                Fetching...
+              </>
+            ) : (
+              <>
+                <Download className="mr-2 h-5 w-5" />
+                Fetch SAM.gov Opportunities
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success/Error Messages */}
+        {fetchSAMMutation.isSuccess && (
+          <div className="mt-4 p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-start gap-3">
+            <CheckCircle className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-green-700">Success!</div>
+              <div className="text-sm text-green-600 mt-1">
+                {fetchSAMMutation.data?.message || 'Successfully fetched SAM.gov opportunities'}
+              </div>
+              {fetchSAMMutation.data?.opportunities && fetchSAMMutation.data.opportunities.length > 0 && (
+                <ul className="mt-2 text-sm text-green-600 space-y-1">
+                  {fetchSAMMutation.data.opportunities.slice(0, 5).map((opp, idx) => (
+                    <li key={idx}>• {opp.title}</li>
+                  ))}
+                  {fetchSAMMutation.data.opportunities.length > 5 && (
+                    <li className="font-semibold">...and {fetchSAMMutation.data.opportunities.length - 5} more</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
+        {fetchSAMMutation.isError && (
+          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <div className="font-semibold text-red-700">Error</div>
+              <div className="text-sm text-red-600 mt-1">
+                {fetchSAMMutation.error?.response?.data?.message ||
+                 fetchSAMMutation.error?.message ||
+                 'Failed to fetch SAM.gov data. Please try again.'}
               </div>
             </div>
           </div>

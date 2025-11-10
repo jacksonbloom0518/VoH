@@ -30,6 +30,7 @@ export const CSV_HEADERS = [
   'topic_hits',
   'created_at',
   'raw_data',
+  'requirements',
 ];
 
 export function ensureCsvFile(csvPath) {

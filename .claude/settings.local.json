@@ -29,7 +29,14 @@
       "Bash(done)",
       "Bash(timeout /t 5 /nobreak)",
       "Bash(npm install:*)",
-      "Bash(cmd /c \"taskkill /F /PID 6344\")"
+      "Bash(cmd /c \"taskkill /F /PID 6344\")",
+      "Bash(del \"grants-web-app\\data\\grants.db\")",
+      "Bash(cmd /c \"taskkill /F /PID 46748\")",
+      "Bash(timeout /t 2 /nobreak)",
+      "Bash(cmd /c \"taskkill /F /IM node.exe\")",
+      "Bash(python -m json.tool:*)",
+      "Bash(python:*)",
+      "Bash(del /F datagrants.db 2)"
     ],
     "deny": [],
     "ask": []
