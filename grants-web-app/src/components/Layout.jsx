@@ -66,6 +66,9 @@ export default function Layout() {
             <p className="mt-2 text-xs">
               Last updated: {new Date().toLocaleDateString()}
             </p>
+            <p className="mt-4 text-xs text-muted-foreground/80 leading-relaxed">
+              Developed in partnership with the <span className="font-medium">UF AIS Consulting Team</span>. We are honored to support your mission and deeply grateful for the vital work you do.
+            </p>
           </div>
         </div>
       </footer>
