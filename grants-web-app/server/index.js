@@ -679,87 +679,6 @@ app.get('/api/opportunities/:id', async (req, res) => {
 });
 
 // GET /api/stats - Get statistics
-// POST /api/mock-data - Generate mock grant data for testing (no external API calls)
-app.post('/api/mock-data', (req, res) => {
-  try {
-    const mockGrants = [
-      {
-        title: 'Domestic Violence Prevention and Services Grant',
-        agency: 'Office on Violence Against Women',
-        source: 'Mock Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Funding for organizations providing comprehensive services to domestic violence survivors including shelter, counseling, legal advocacy, and economic empowerment.',
-        award_amount: 350000
-      },
-      {
-        title: 'Sex Trafficking Victim Services and Support',
-        agency: 'Department of Justice',
-        source: 'Mock Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Grant opportunity for nonprofits providing case management, housing assistance, legal services, and trauma-informed care to survivors of sex trafficking.',
-        award_amount: 500000
-      },
-      {
-        title: 'Transitional Housing for Survivors Program',
-        agency: 'HUD - Department of Housing and Urban Development',
-        source: 'Mock Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 75 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Competitive grant for creating and operating transitional housing programs for women escaping domestic violence and human trafficking with supportive services.',
-        award_amount: 1000000
-      },
-      {
-        title: 'Mental Health and Trauma Services for Trafficking Survivors',
-        agency: 'SAMHSA - Substance Abuse and Mental Health Services Administration',
-        source: 'Mock Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Funding for integrated mental health and substance abuse treatment services designed specifically for survivors of human trafficking with trauma-informed approaches.',
-        award_amount: 400000
-      },
-      {
-        title: 'Legal Advocacy and Justice Services Grant',
-        agency: 'Department of Justice - Office for Victims of Crime',
-        source: 'Mock Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Grant for providing legal representation, immigration assistance, protective orders, and justice advocacy services to domestic violence and trafficking survivors.',
-        award_amount: 300000
-      }
-    ];
-
-    let inserted = 0;
-    for (const grant of mockGrants) {
-      const id = `mock-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const stmt = db.prepare(`
-        INSERT INTO opportunities (
-          id, title, agency, source, source_record_url, posted_date, response_deadline, summary, award_amount
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      stmt.run([
-        id, grant.title, grant.agency, grant.source, grant.source_record_url,
-        grant.posted_date, grant.response_deadline, grant.summary, grant.award_amount
-      ]);
-      inserted++;
-    }
-
-    // IMPORTANT: Save the database to disk
-    saveDatabase();
-
-    res.json({ success: true, message: `✅ Added ${inserted} mock grant opportunities! Refresh to see them.` });
-  } catch (error) {
-    console.error('Error adding mock data:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.get('/api/stats', (req, res) => {
   try {
     // Total count
@@ -912,13 +831,14 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
 
     for (const opp of opportunities) {
       try {
-        // Generate a unique ID using number field
+        // Generate a unique ID using number field (no random suffix to prevent duplicates)
         const oppId = opp.number || opp.id || Date.now();
-        const id = `grantsgov-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `grantsgov-${oppId}`;
 
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov'; // Always set
         const title = opp.title || opp.opportunityTitle || 'Untitled Opportunity';
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
         const source_record_url = opp.id
           ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
@@ -1055,13 +975,14 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
 
     for (const opp of opportunities) {
       try {
-        // Generate a unique ID using number field
+        // Generate a unique ID using number field (no random suffix to prevent duplicates)
         const oppId = opp.number || opp.id || Date.now();
-        const id = `forecast-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `forecast-${oppId}`;
 
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov Forecast';
         const title = opp.title || opp.opportunityTitle || 'Untitled Forecast';
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
         const source_record_url = opp.id
           ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
@@ -1198,10 +1119,11 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
     for (const opp of opportunities) {
       try {
         const oppId = opp.number || opp.id || Date.now();
-        const id = `hud-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `hud-${oppId}`;
 
         const source = 'Grants.gov'; // Changed from 'Grants.gov HUD' to match other Grants.gov opportunities
         const title = opp.title || opp.opportunityTitle || 'Untitled HUD Grant';
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
         const source_record_url = opp.id
           ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
@@ -1314,10 +1236,11 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
     for (const opp of opportunities) {
       try {
         const oppId = opp.number || opp.id || Date.now();
-        const id = `samhsa-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `samhsa-${oppId}`;
 
         const source = 'Grants.gov SAMHSA';
         const title = opp.title || opp.opportunityTitle || 'Untitled SAMHSA Grant';
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
         const source_record_url = opp.id
           ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
@@ -2131,6 +2054,42 @@ app.post('/api/admin/clear-all', (req, res) => {
   }
 });
 
+// POST /api/clear-source - Clear grants from a specific source
+app.post('/api/clear-source', (req, res) => {
+  try {
+    const { source } = req.body;
+    
+    if (!source) {
+      return res.status(400).json({ error: 'Source parameter required' });
+    }
+
+    const countStmt = db.prepare('SELECT COUNT(*) as count FROM opportunities WHERE source LIKE ?');
+    countStmt.bind([`%${source}%`]);
+    countStmt.step();
+    const beforeCount = countStmt.getAsObject().count || 0;
+    countStmt.free();
+
+    const deleteStmt = db.prepare('DELETE FROM opportunities WHERE source LIKE ?');
+    deleteStmt.bind([`%${source}%`]);
+    deleteStmt.step();
+    deleteStmt.free();
+
+    saveDatabase();
+
+    res.json({
+      success: true,
+      message: `Cleared ${beforeCount} grants from source: ${source}`,
+      deleted: beforeCount
+    });
+  } catch (error) {
+    console.error('Error clearing source:', error);
+    res.status(500).json({
+      error: 'Failed to clear source',
+      message: error.message
+    });
+  }
+});
+
 // POST /api/send-email - send recent opportunities by email
 app.post('/api/send-email', async (req, res) => {
   try {
@@ -2218,67 +2177,6 @@ app.post('/api/send-email', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-
-// POST /api/test-data - Add sample opportunities for testing
-app.post('/api/test-data', (req, res) => {
-  try {
-    const sampleOpportunities = [
-      {
-        id: `test-1-${Date.now()}`,
-        title: 'Domestic Violence Prevention Grant',
-        agency: 'Office on Violence Against Women',
-        source: 'Test Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date().toISOString(),
-        response_deadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Grant for supporting domestic violence survivors and prevention programs.',
-        award_amount: 250000
-      },
-      {
-        id: `test-2-${Date.now()}`,
-        title: 'Sex Trafficking Victim Services',
-        agency: 'Department of Justice',
-        source: 'Test Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Funding for organizations providing services to victims of sex trafficking.',
-        award_amount: 500000
-      },
-      {
-        id: `test-3-${Date.now()}`,
-        title: 'Housing Support for Survivors',
-        agency: 'HUD',
-        source: 'Test Data',
-        source_record_url: 'https://www.grants.gov/',
-        posted_date: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString(),
-        response_deadline: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
-        summary: 'Grant for providing safe housing to domestic violence and trafficking survivors.',
-        award_amount: 1000000
-      }
-    ];
-
-    let inserted = 0;
-    for (const opp of sampleOpportunities) {
-      const stmt = db.prepare(`
-        INSERT OR REPLACE INTO opportunities (
-          id, title, agency, source, source_record_url, posted_date, response_deadline, summary, award_amount
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      stmt.run([
-        opp.id, opp.title, opp.agency, opp.source, opp.source_record_url,
-        opp.posted_date, opp.response_deadline, opp.summary, opp.award_amount
-      ]);
-      inserted++;
-    }
-
-    res.json({ success: true, message: `Added ${inserted} test opportunities` });
-  } catch (error) {
-    console.error('Error adding test data:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Start server
 (async () => {
   await initDatabase();
