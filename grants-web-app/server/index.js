@@ -22,7 +22,7 @@ import { scrapeOVWGrants } from '../scraper/ovw-scraper.js';
 import { scrapeACFGrants } from '../scraper/acf-scraper.js';
 import { scrapeFloridaDCFGrants } from '../scraper/florida-dcf-scraper.js';
 import { scrapeJaxFoundationGrants } from '../scraper/jax-foundation-scraper.js';
-import { batchProcessRequirements } from './requirements-generator.js';
+import { batchProcessRequirements, processGrantRequirements } from './requirements-generator.js';
 
 dotenv.config();
 
@@ -211,9 +211,9 @@ function insertOpportunitiesIntoDb(records = []) {
 /**
  * Automatically process requirements for grants that don't have them yet
  * Runs in the background without blocking the response
- * @param {number} maxGrants - Maximum number of grants to process (default: 5)
+ * @param {number} maxGrants - Maximum number of grants to process (default: 20)
  */
-async function processNewGrantRequirements(maxGrants = 5) {
+async function processNewGrantRequirements(maxGrants = 20) {
   try {
     // Only process if Anthropic API key is configured
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -222,8 +222,8 @@ async function processNewGrantRequirements(maxGrants = 5) {
       return;
     }
 
-    // Find grants without requirements
-    const stmt = db.prepare('SELECT id FROM opportunities WHERE requirements IS NULL LIMIT ?');
+    // Find grants without requirements (empty string or NULL)
+    const stmt = db.prepare('SELECT id FROM opportunities WHERE (requirements IS NULL OR requirements = \'\') LIMIT ?');
     stmt.bind([maxGrants]);
 
     const grantsToProcess = [];
@@ -374,7 +374,7 @@ async function fetchPageHtml(url) {
           'User-Agent': randomUserAgent(),
           Accept: 'text/html,application/xhtml+xml',
         },
-        timeout: 15000,
+        timeout: 10000, // Reduced from 15s to 10s
       });
       const contentType = response.headers['content-type'] || '';
       if (isPdfContent(url, contentType)) {
@@ -409,7 +409,7 @@ async function evaluateCandidate(candidate, location, dedupeSets) {
   if (!isAllowedDomain(hostname)) return null;
   if (dedupeSets.urlSet.has(normalizedUrl)) return null;
   if (!(await isAllowedByRobots(normalizedUrl))) return null;
-  await delay(250 + Math.random() * 400);
+  await delay(100 + Math.random() * 200); // Reduced from 250-650ms to 100-300ms
   const page = await fetchPageHtml(normalizedUrl);
   if (!page || page.isPdf) return null;
   const opportunity = analyzeGrantPage({
@@ -428,14 +428,37 @@ async function evaluateCandidate(candidate, location, dedupeSets) {
 async function collectLocalOpportunities({ location, dedupeSets, limit }) {
   const queries = buildSearchQueries(location);
   const candidates = [];
+  const targetCount = limit * 2; // Reduced from 3x to 2x
+  const batchSize = 5; // Process 5 pages in parallel at a time
+
   for (const query of queries) {
     const serpResults = await fetchSerpResults(query);
-    for (const candidate of serpResults) {
-      const opportunity = await evaluateCandidate(candidate, location, dedupeSets);
-      if (opportunity) {
-        candidates.push(opportunity);
-        if (candidates.length >= limit * 3) {
-          return candidates;
+
+    // Process candidates in batches for parallel fetching
+    for (let i = 0; i < serpResults.length; i += batchSize) {
+      // Early exit if we have enough candidates
+      if (candidates.length >= targetCount) {
+        return candidates;
+      }
+
+      const batch = serpResults.slice(i, i + batchSize);
+      const promises = batch.map(candidate =>
+        evaluateCandidate(candidate, location, dedupeSets)
+          .catch(err => {
+            console.error('Error evaluating candidate:', err.message);
+            return null;
+          })
+      );
+
+      const results = await Promise.allSettled(promises);
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          candidates.push(result.value);
+          // Check again after each successful candidate
+          if (candidates.length >= targetCount) {
+            return candidates;
+          }
         }
       }
     }
@@ -575,19 +598,52 @@ app.get('/api/opportunities', (req, res) => {
 });
 
 // GET /api/opportunities/:id - Get single opportunity with full details
-app.get('/api/opportunities/:id', (req, res) => {
+app.get('/api/opportunities/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const stmt = db.prepare('SELECT * FROM opportunities WHERE id = ?');
     stmt.bind([id]);
-    
+
     if (!stmt.step()) {
       stmt.free();
       return res.status(404).json({ error: 'Opportunity not found' });
     }
-    
+
     const opportunity = stmt.getAsObject();
     stmt.free();
+
+    // If requirements are missing, generate them synchronously
+    if (!opportunity.requirements || opportunity.requirements.trim() === '') {
+      console.log(`\n🔄 Requirements missing for ${id}, generating synchronously...`);
+
+      try {
+        // Check if API key is configured
+        const apiKey = process.env.ANTHROPIC_API_KEY;
+        if (apiKey && apiKey.trim() !== '') {
+          // Generate requirements with 45-second timeout
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Requirements generation timeout')), 45000)
+          );
+
+          const requirementsPromise = processGrantRequirements(db, id);
+
+          const requirements = await Promise.race([requirementsPromise, timeoutPromise]);
+
+          // Save database after generating requirements
+          saveDatabase();
+
+          // Update opportunity object with new requirements
+          opportunity.requirements = requirements;
+          console.log(`   ✅ Requirements generated successfully for ${id}`);
+        } else {
+          console.log(`   ⏭️  Skipping requirements generation (no API key configured)`);
+        }
+      } catch (error) {
+        console.error(`   ⚠️  Failed to generate requirements for ${id}:`, error.message);
+        // Don't fail the request, just return without requirements
+        // User will see the "check back later" message
+      }
+    }
 
     // Handle topic_hits: can be JSON array or semicolon-separated string
     let topicHits = [];
@@ -863,8 +919,8 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov'; // Always set
         const title = opp.title || opp.opportunityTitle || 'Untitled Opportunity';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         // Validate before INSERT
@@ -1006,8 +1062,8 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov Forecast';
         const title = opp.title || opp.opportunityTitle || 'Untitled Forecast';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         // Validate before INSERT
@@ -1144,10 +1200,10 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
         const oppId = opp.number || opp.id || Date.now();
         const id = `hud-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
 
-        const source = 'Grants.gov HUD';
+        const source = 'Grants.gov'; // Changed from 'Grants.gov HUD' to match other Grants.gov opportunities
         const title = opp.title || opp.opportunityTitle || 'Untitled HUD Grant';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         if (!source || source === '') {
@@ -1262,8 +1318,8 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
 
         const source = 'Grants.gov SAMHSA';
         const title = opp.title || opp.opportunityTitle || 'Untitled SAMHSA Grant';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         if (!source || source === '') {

@@ -241,44 +241,39 @@ export async function generateRequirementsSummary(grantData, extractedContent, s
 
     const anthropic = new Anthropic({ apiKey });
 
-    const hasContent = (extractedContent && extractedContent.length > 100) ||
-                      (searchResults && searchResults.length > 100);
+    // Build a comprehensive prompt that leverages Claude's knowledge base
+    // Use scraped content as supplementary information when available
+    const prompt = `You are an expert on federal grant programs and nonprofit grant requirements. Generate a concise bullet-point summary (5-8 bullets) of the key application requirements for this grant opportunity.
 
-    let prompt;
+Grant Information:
+• Title: ${grantData.title}
+• Agency: ${grantData.agency || 'Not specified'}
+• Summary: ${grantData.summary || 'Not provided'}
+${grantData.source_record_url ? `• Source: ${grantData.source_record_url}` : ''}
+${extractedContent && extractedContent.length > 50 ? `\n\nExtracted Grant Documentation:\n${extractedContent}\n` : ''}
+${searchResults && searchResults.length > 50 ? `\n\nAdditional Context:\n${searchResults}\n` : ''}
 
-    if (hasContent) {
-      prompt = `Analyze this grant opportunity and create a concise bullet-point summary (3-7 bullets) of the key application requirements. Focus on the most important eligibility criteria and requirements.
+Instructions:
+Draw from your knowledge of federal grant programs, agency-specific requirements, and common nonprofit grant application processes to generate requirements that typically apply to this type of grant. Focus on:
 
-Grant Title: ${grantData.title}
-Agency: ${grantData.agency || 'Not specified'}
-Summary: ${grantData.summary || 'Not provided'}
+1. **Eligibility Requirements**: Organization type (501(c)(3), government, tribe, etc.), geographic restrictions, size/capacity requirements
+2. **Data & Reporting Requirements**: Data collection systems, performance measurement, outcome tracking, quarterly/annual reporting obligations
+3. **Compliance Requirements**: Federal regulations (2 CFR 200, FFATA), financial audits, single audit requirements, civil rights compliance
+4. **Application Documentation**: IRS determination letter, DUNS/UEI number, SAM.gov registration, financial statements, organizational capacity evidence
+5. **Program-Specific Requirements**: Match/cost-share requirements, evidence-based practices, staff qualifications, partnership requirements
 
-${extractedContent ? `Content from grant document:\n${extractedContent}\n\n` : ''}
-${searchResults ? `Additional information from web search:\n${searchResults}\n\n` : ''}
+Based on the grant title and agency, infer the most relevant requirements. For example:
+- ACF grants typically require data systems for tracking beneficiary outcomes
+- DOJ Office on Violence Against Women grants require victim services experience and trauma-informed approaches
+- HUD grants often require housing/homelessness data systems and HMIS participation
+- SAMHSA grants require substance abuse treatment credentials and outcome measurement
+- General federal grants require SAM.gov registration, financial management systems, and 2 CFR 200 compliance
 
-Create a bullet-point list focusing on:
-• Eligibility criteria (nonprofit status, organization type, location requirements)
-• Required documentation or certifications
-• Key qualifications or experience needed
-• Matching funds or cost-share requirements (if any)
-• Any specific restrictions or limitations
-
-Format your response as plain text bullet points starting with • (bullet character). Each bullet should be one concise line. If there isn't enough information to create a meaningful summary, respond with exactly: "Insufficient information available."`;
-    } else {
-      // Not enough content found
-      prompt = `Based on the limited information available for this grant, create a brief message indicating that detailed requirements are not available and direct applicants to the source.
-
-Grant Title: ${grantData.title}
-Agency: ${grantData.agency || 'Not specified'}
-Source URL: ${grantData.source_record_url}
-Contact: ${grantData.poc_email || grantData.poc_phone || 'Not provided'}
-
-Respond with exactly: "Insufficient information available."`;
-    }
+Format your response as plain text bullet points starting with • (bullet character). Each bullet should be one clear, actionable requirement. Be specific and practical.`;
 
     const message = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet',
-      max_tokens: 500,
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: 800,
       messages: [{
         role: 'user',
         content: prompt
@@ -286,14 +281,6 @@ Respond with exactly: "Insufficient information available."`;
     });
 
     const responseText = message.content[0].text.trim();
-
-    // Check if insufficient information
-    if (responseText.includes('Insufficient information available')) {
-      const fallbackMessage = `Requirements information unavailable. For details, visit: ${grantData.source_record_url}${grantData.poc_email ? '\nContact: ' + grantData.poc_email : ''}${grantData.poc_phone ? '\nPhone: ' + grantData.poc_phone : ''}`;
-      console.log(`   ℹ️  Insufficient data, using fallback message`);
-      return fallbackMessage;
-    }
-
     console.log(`   ✅ Generated ${responseText.length} characters of requirements`);
     return responseText;
 

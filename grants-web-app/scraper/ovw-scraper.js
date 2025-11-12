@@ -66,7 +66,10 @@ function extractNOFOsFromListPage($, baseUrl) {
       return;
     }
 
-    const fullUrl = href.startsWith('http') ? href : new URL(href, baseUrl).href;
+    let fullUrl = href.startsWith('http') ? href : new URL(href, baseUrl).href;
+
+    // Clean up URL: remove dl?inline to get the file page URL instead of direct download
+    fullUrl = fullUrl.replace(/\/dl\?inline$/, '');
 
     // Try to find the deadline in nearby text
     const parentText = $(el).parent().text();

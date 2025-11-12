@@ -157,7 +157,7 @@ export default function DetailPage() {
       )}
 
       {/* Requirements */}
-      {opp.requirements && (
+      {opp.requirements ? (
         <div className="bg-card rounded-2xl shadow-apple p-8">
           <h2 className="text-2xl font-semibold text-foreground mb-6 flex items-center gap-3">
             <CheckCircle2 className="h-6 w-6 text-primary" />
@@ -195,6 +195,16 @@ export default function DetailPage() {
               Always verify requirements by visiting the official grant source.
             </p>
           </div>
+        </div>
+      ) : (
+        <div className="bg-card rounded-2xl shadow-apple p-8">
+          <h2 className="text-2xl font-semibold text-foreground mb-6 flex items-center gap-3">
+            <Clock className="h-6 w-6 text-muted-foreground" />
+            Application Requirements
+          </h2>
+          <p className="text-muted-foreground">
+            Requirements are being generated automatically in the background. Please check back in a few minutes.
+          </p>
         </div>
       )}
 

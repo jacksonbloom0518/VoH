@@ -2,33 +2,61 @@ import { load } from 'cheerio';
 import crypto from 'crypto';
 
 const FEATURE_PATTERNS = {
-  apply: /\bapply\b|\bapplication\b/i,
-  eligibility: /\beligibility\b|\bwho can apply\b/i,
-  deadline: /\bdeadline\b|\bclosing date\b|\bdue date\b/i,
-  award: /\baward\b|\bceiling\b|\bfunding (?:amount|level)\b/i,
-  cfda: /\bCFDA\b|\bALN\b/i,
-  opportunityNumber: /\b(opportunity|solicitation|announcement)\s+(number|no\.?)/i,
-  forms: /\bapplication (?:package|forms)\b|\bdownload (?:the )?forms\b/i,
+  apply: /\bapply\b|\bapplication\b|\bsubmit\b|\bsubmission\b/i,
+  eligibility: /\beligibility\b|\beligible\b|\bwho can apply\b|\bqualif(?:y|ied|ications)\b/i,
+  deadline: /\bdeadline\b|\bclosing date\b|\bdue date\b|\bsubmission date\b|\bapplication period\b/i,
+  award: /\baward\b|\bceiling\b|\bfloor\b|\bfunding (?:amount|level|range)\b|\bgrant (?:amount|size)\b|\bup to \$\d/i,
+  cfda: /\bCFDA\b|\bALN\b|\bCF(?:D)?A\s*#?\s*\d+/i,
+  opportunityNumber: /\b(opportunity|solicitation|announcement|funding|grant)\s+(number|no\.?|#|id)/i,
+  forms: /\bapplication (?:package|forms|materials)\b|\bdownload (?:the )?forms?\b|\bapply online\b|\bapplication portal\b/i,
+  contact: /\b(contact|questions|inquiries).*?(?:@|email|phone|call)\b|\bpoint of contact\b/i,
+  guidelines: /\bguidelines\b|\brequirements\b|\binstructions\b|\bprogram guide\b/i,
+  program: /\bprogram\b|\binitiative\b|\bproject\b/i,
 };
 
 const TOPIC_KEYWORDS = [
   'human trafficking',
   'sex trafficking',
+  'labor trafficking',
   'victim services',
   'survivor services',
+  'victim assistance',
   'domestic violence',
   'sexual assault',
+  'sexual violence',
+  'intimate partner violence',
+  'family violence',
+  'gender-based violence',
+  'dating violence',
   'women',
   'shelter',
   'housing',
   'rehousing',
+  'transitional housing',
+  'safe housing',
+  'emergency shelter',
   'legal aid',
+  'legal services',
   'case management',
   'mental health',
   'behavioral health',
+  'trauma',
+  'trauma-informed',
+  'crisis services',
+  'crisis intervention',
+  'emergency services',
+  'hotline',
+  'advocacy',
+  'counseling',
   'workforce',
   'nonprofit capacity',
   'community services',
+  'social services',
+  'vawa', // Violence Against Women Act
+  'fvpsa', // Family Violence Prevention Services Act
+  'voca', // Victims of Crime Act
+  'crime victim',
+  'violent crime',
 ];
 
 const BLOCKLIST_SEGMENTS = ['news', 'press', 'blog', 'story', 'media', 'opinion', 'insights'];
@@ -76,7 +104,7 @@ const TRUSTED_HOSTS = new Set([
   'hhs.gov',
 ]);
 
-const MIN_FEATURE_MATCHES = 3;
+const MIN_FEATURE_MATCHES = 2; // Reduced from 3 to better handle local/state grant sites
 
 export function normalizeText(value = '') {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -218,8 +246,38 @@ export function hasTribalSpecificContent(title = '', summary = '', text = '', ur
     return false; // Don't reject OVW NOFO list page
   }
 
-  const haystack = `${title} ${summary} ${text}`.toLowerCase();
-  return TRIBAL_BLOCKLIST.some((term) => haystack.includes(term));
+  // Only check title and summary for tribal-specific indicators (not full body text)
+  const haystack = `${title} ${summary}`.toLowerCase();
+
+  // Check if it's explicitly tribal-only
+  const tribalOnlyIndicators = [
+    'tribal government only',
+    'tribal only',
+    'only tribal',
+    'exclusively tribal',
+    'tribal nations only',
+    'federally recognized tribes only',
+    'for tribal governments',
+    'eligible: tribal',
+    'eligibility: tribal'
+  ];
+
+  if (tribalOnlyIndicators.some((term) => haystack.includes(term))) {
+    return true;
+  }
+
+  // Check if "tribal" appears but also mentions other eligible entities
+  const hasTribalMention = TRIBAL_BLOCKLIST.some((term) => haystack.includes(term));
+  if (hasTribalMention) {
+    // Check if other entities are also mentioned as eligible
+    const hasOtherEntities = /\b(state|local|county|city|municipal|nonprofit|ngo|community|organization|faith-based)\b/i.test(haystack);
+    if (hasOtherEntities) {
+      return false; // Not tribal-specific if other entities are eligible
+    }
+    return true; // Tribal-only if only tribal terms are mentioned
+  }
+
+  return false;
 }
 
 export function isGenericLandingPage(title = '', url = '', text = '') {
@@ -249,15 +307,26 @@ export function isGenericLandingPage(title = '', url = '', text = '') {
     return true;
   }
 
-  // Check if page content is too short (< 1000 chars = likely a stub/landing page)
-  if (text.length < 1000) {
-    return true;
+  // Check if page content is too short - be more lenient for .gov/.fl.us domains
+  const hostname = url ? new URL(url).hostname.toLowerCase() : '';
+  const isGovSite = hostname.endsWith('.gov') || hostname.endsWith('.fl.us') || hostname.endsWith('.mil');
+
+  if (isGovSite) {
+    // Government sites: only reject if very short (< 300 chars)
+    if (text.length < 300) {
+      return true;
+    }
+  } else {
+    // Non-government sites: reject if < 500 chars (reduced from 1000)
+    if (text.length < 500) {
+      return true;
+    }
   }
 
   return false;
 }
 
-export function hasMinimumSpecificity(response_deadline, award_amount, text = '') {
+export function hasMinimumSpecificity(response_deadline, award_amount, text = '', url = '') {
   // Must have at least ONE of:
   // 1. Specific deadline date
   if (response_deadline && response_deadline.trim() !== '') {
@@ -276,6 +345,25 @@ export function hasMinimumSpecificity(response_deadline, award_amount, text = ''
 
   if (hasOppNumber || hasFOA || hasFiscalYear) {
     return true;
+  }
+
+  // 4. Be more lenient for Florida state/local sites and .gov domains
+  const hostname = url ? new URL(url).hostname.toLowerCase() : '';
+  const isFloridaSite = hostname.includes('florida') || hostname.includes('.fl.') ||
+                        hostname.includes('jacksonville') || hostname.includes('coj.net');
+  const isGovSite = hostname.endsWith('.gov');
+
+  if (isFloridaSite || isGovSite) {
+    // Accept if has ANY of these indicators
+    const hasContactInfo = /\b(contact|email|phone).*?[@]|[@].*?\b(gov|edu|org|com)/i.test(text) ||
+                           /\d{3}[-.]?\d{3}[-.]?\d{4}/.test(text);
+    const hasDownloadLink = /\bdownload\b.*?\b(application|form|pdf|guidelines)/i.test(text);
+    const hasApplyLink = /\bapply\b.*?\b(online|here|now|portal)/i.test(text);
+    const hasRollingDeadline = /\b(rolling|ongoing|continuous|year-round|until funds)\b/i.test(text);
+
+    if (hasContactInfo || hasDownloadLink || hasApplyLink || hasRollingDeadline) {
+      return true;
+    }
   }
 
   return false;
@@ -331,7 +419,7 @@ export function analyzeGrantPage({ url, html, snippet = '', locationHint = '' })
   }
 
   // Filter 4: Require minimum specificity
-  if (!hasMinimumSpecificity(response_deadline, award_amount, text)) {
+  if (!hasMinimumSpecificity(response_deadline, award_amount, text, url)) {
     console.log(`❌ Rejected (lacks specificity - no deadline, amount, or opp number): ${title}`);
     return { isGrant: false };
   }
