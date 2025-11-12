@@ -681,7 +681,9 @@ app.post('/api/mock-data', (req, res) => {
 
     let inserted = 0;
     for (const grant of mockGrants) {
-      const id = `mock-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      // Use stable ID based on grant title hash to prevent duplicates
+      const crypto = require('crypto');
+      const id = `mock-${crypto.createHash('sha1').update(grant.title).digest('hex').slice(0, 12)}`;
       const stmt = db.prepare(`
         INSERT INTO opportunities (
           id, title, agency, source, source_record_url, posted_date, response_deadline, summary, award_amount
@@ -856,9 +858,9 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
 
     for (const opp of opportunities) {
       try {
-        // Generate a unique ID using number field
+        // Generate a unique ID using number field (no random suffix to prevent duplicates)
         const oppId = opp.number || opp.id || Date.now();
-        const id = `grantsgov-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `grantsgov-${oppId}`;
 
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov'; // Always set
@@ -999,9 +1001,9 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
 
     for (const opp of opportunities) {
       try {
-        // Generate a unique ID using number field
+        // Generate a unique ID using number field (no random suffix to prevent duplicates)
         const oppId = opp.number || opp.id || Date.now();
-        const id = `forecast-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `forecast-${oppId}`;
 
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov Forecast';
@@ -1142,7 +1144,7 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
     for (const opp of opportunities) {
       try {
         const oppId = opp.number || opp.id || Date.now();
-        const id = `hud-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `hud-${oppId}`;
 
         const source = 'Grants.gov HUD';
         const title = opp.title || opp.opportunityTitle || 'Untitled HUD Grant';
@@ -1258,7 +1260,7 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
     for (const opp of opportunities) {
       try {
         const oppId = opp.number || opp.id || Date.now();
-        const id = `samhsa-${oppId}-${Math.random().toString(36).substr(2, 9)}`;
+        const id = `samhsa-${oppId}`;
 
         const source = 'Grants.gov SAMHSA';
         const title = opp.title || opp.opportunityTitle || 'Untitled SAMHSA Grant';
