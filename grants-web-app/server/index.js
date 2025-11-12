@@ -782,8 +782,9 @@ app.post('/api/fetch-grants-gov', async (req, res) => {
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov'; // Always set
         const title = opp.title || opp.opportunityTitle || 'Untitled Opportunity';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         // Validate before INSERT
@@ -925,8 +926,9 @@ app.post('/api/fetch-grants-forecasts', async (req, res) => {
         // DEFENSIVE: Ensure required NOT NULL fields are present
         const source = 'Grants.gov Forecast';
         const title = opp.title || opp.opportunityTitle || 'Untitled Forecast';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         // Validate before INSERT
@@ -1065,8 +1067,9 @@ app.post('/api/fetch-hud-grants', async (req, res) => {
 
         const source = 'Grants.gov HUD';
         const title = opp.title || opp.opportunityTitle || 'Untitled HUD Grant';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         if (!source || source === '') {
@@ -1181,8 +1184,9 @@ app.post('/api/fetch-samhsa-grants', async (req, res) => {
 
         const source = 'Grants.gov SAMHSA';
         const title = opp.title || opp.opportunityTitle || 'Untitled SAMHSA Grant';
-        const source_record_url = opp.number
-          ? `https://www.grants.gov/search-results-detail/${opp.number}`
+        // Use the 'id' field for the URL (numeric ID), not 'number' (opportunity number)
+        const source_record_url = opp.id
+          ? `https://www.grants.gov/search-results-detail/${opp.id}`
           : `https://www.grants.gov/`;
 
         if (!source || source === '') {
